@@ -21,6 +21,9 @@ pub struct IpcMessage {
     pub data: String,
 }
 
+#[cfg(target_os = "macos")]
+pub const SOCKET_PATH: &str = "/tmp/keydo.socket";
+#[cfg(not(target_os = "macos"))]
 pub const SOCKET_PATH: &str = "/var/run/keyd.socket";
 
 pub fn create_server() -> anyhow::Result<UnixListener> {

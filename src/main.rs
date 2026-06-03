@@ -9,6 +9,8 @@ mod vkbd;
 mod unicode;
 mod ipc;
 mod tests;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use clap::{Parser, Subcommand};
 use crate::config_parser::ConfigParser;
@@ -108,7 +110,7 @@ fn main() -> anyhow::Result<()> {
 fn run_monitor(show_time: bool) -> anyhow::Result<()> {
     let mut devices = scan_devices();
     let borrowed_fds: Vec<BorrowedFd> =
-        devices.iter().map(|d| unsafe { BorrowedFd::borrow_raw(d.device.as_raw_fd()) }).collect();
+        devices.iter().map(|d| unsafe { BorrowedFd::borrow_raw(d.as_raw_fd()) }).collect();
     let mut poll_fds: Vec<PollFd> =
         borrowed_fds.iter().map(|fd| PollFd::new(fd, PollFlags::POLLIN)).collect();
 
@@ -120,22 +122,20 @@ fn run_monitor(show_time: bool) -> anyhow::Result<()> {
         for i in 0..poll_fds.len() {
             if let Some(revents) = poll_fds[i].revents() {
                 if revents.contains(PollFlags::POLLIN) {
-                    let events: Vec<_> = devices[i].device.fetch_events()?.collect();
-                    for ev in events {
-                        if ev.event_type() == evdev::EventType::KEY {
-                            if show_time {
-                                let now = std::time::Instant::now();
-                                print!("+{} ms\t", now.duration_since(last_time).as_millis());
-                                last_time = now;
-                            }
-                            println!(
-                                "{}\t{}\t{}\t{}",
-                                devices[i].device.name().unwrap_or("Unknown"),
-                                devices[i].id,
-                                crate::keys::get_key_name(ev.code()),
-                                if ev.value() == 1 { "down" } else { "up" }
-                            );
+                    let events = devices[i].read_key_events()?;
+                    for (code, pressed) in events {
+                        if show_time {
+                            let now = std::time::Instant::now();
+                            print!("+{} ms\t", now.duration_since(last_time).as_millis());
+                            last_time = now;
                         }
+                        println!(
+                            "{}\t{}\t{}\t{}",
+                            devices[i].name(),
+                            devices[i].id,
+                            crate::keys::get_key_name(code),
+                            if pressed { "down" } else { "up" }
+                        );
                     }
                 }
             }
@@ -281,7 +281,7 @@ impl Daemon {
     }
 
     fn remove_device_by_fd(&mut self, fd: i32) {
-        if let Some(pos) = self.grabbed_devices.iter().position(|d| d.device.as_raw_fd() == fd) {
+        if let Some(pos) = self.grabbed_devices.iter().position(|d| d.as_raw_fd() == fd) {
             let _ = self.grabbed_devices[pos].ungrab();
             self.grabbed_devices.remove(pos);
         }
@@ -408,7 +408,7 @@ fn run_daemon() -> anyhow::Result<()> {
         let borrowed_dev_fds: Vec<BorrowedFd> = daemon
             .grabbed_devices
             .iter()
-            .map(|d| unsafe { BorrowedFd::borrow_raw(d.device.as_raw_fd()) })
+            .map(|d| unsafe { BorrowedFd::borrow_raw(d.as_raw_fd()) })
             .collect();
         let ipc_borrowed = unsafe { BorrowedFd::borrow_raw(ipc_listener.as_raw_fd()) };
 
@@ -470,39 +470,34 @@ fn run_daemon() -> anyhow::Result<()> {
                 None => continue,
             };
             if revents.contains(PollFlags::POLLERR) || revents.contains(PollFlags::POLLHUP) {
-                disconnected_fds.push(daemon.grabbed_devices[i].device.as_raw_fd());
+                disconnected_fds.push(daemon.grabbed_devices[i].as_raw_fd());
                 continue;
             }
             if !revents.contains(PollFlags::POLLIN) {
                 continue;
             }
-            let dev_fd = daemon.grabbed_devices[i].device.as_raw_fd();
-            let events: Vec<_> = match daemon.grabbed_devices[i].device.fetch_events() {
-                Ok(evs) => evs.collect(),
+            let dev_fd = daemon.grabbed_devices[i].as_raw_fd();
+            let events = match daemon.grabbed_devices[i].read_key_events() {
+                Ok(evs) => evs,
                 Err(_) => {
                     disconnected_fds.push(dev_fd);
                     continue;
                 }
             };
-            for ev in events {
-                if ev.event_type() == evdev::EventType::KEY {
-                    let code = ev.code();
-                    let pressed = ev.value() != 0;
-
-                    // Check panic escape: Esc + Backspace + Enter held simultaneously.
-                    for (j, &pc) in PANIC_CODES.iter().enumerate() {
-                        if code == pc {
-                            panic_keys[j] = pressed;
-                        }
+            for (code, pressed) in events {
+                // Check panic escape: Esc + Backspace + Enter held simultaneously.
+                for (j, &pc) in PANIC_CODES.iter().enumerate() {
+                    if code == pc {
+                        panic_keys[j] = pressed;
                     }
-                    if panic_keys.iter().all(|&v| v) {
-                        eprintln!("keydo: panic escape activated, exiting.");
-                        running.store(false, Ordering::Relaxed);
-                        break;
-                    }
-
-                    let _ = daemon.process_key_event(code, pressed);
                 }
+                if panic_keys.iter().all(|&v| v) {
+                    eprintln!("keydo: panic escape activated, exiting.");
+                    running.store(false, Ordering::Relaxed);
+                    break;
+                }
+
+                let _ = daemon.process_key_event(code, pressed);
             }
         }
         for fd in disconnected_fds {
