@@ -35,8 +35,10 @@ const FIELD_KBD_AUTOREPEAT:          u32 = 8;
 // CGScrollEventUnit: kCGScrollEventUnitLine = 1
 const SCROLL_UNIT_LINE: u32 = 1;
 
-// CGEventTapLocation: kCGHIDEventTap = 0
-const TAP_HID: u32 = 0;
+// kCGAnnotatedSessionEventTap = 2: injected events bypass the kCGHIDEventTap
+// tap (our tap), so they reach applications directly without being
+// re-intercepted and re-suppressed in an infinite cycle.
+const TAP_ANNOTATED: u32 = 2;
 
 #[repr(C)]
 struct CGPoint { x: f64, y: f64 }
@@ -84,7 +86,7 @@ fn mark_and_post(event: CGEventRef) {
     if event.is_null() { return; }
     unsafe {
         CGEventSetIntegerValueField(event, FIELD_SOURCE_USER_DATA, KEYD_EVENT_MARKER);
-        CGEventPost(TAP_HID, event);
+        CGEventPost(TAP_ANNOTATED, event);
         CFRelease(event);
     }
 }
@@ -153,7 +155,7 @@ fn post_key_repeat(cgkey: u16) {
     unsafe {
         CGEventSetIntegerValueField(ev, FIELD_KBD_AUTOREPEAT, 1);
         CGEventSetIntegerValueField(ev, FIELD_SOURCE_USER_DATA, KEYD_EVENT_MARKER);
-        CGEventPost(TAP_HID, ev);
+        CGEventPost(TAP_ANNOTATED, ev);
         CFRelease(ev);
     }
 }

@@ -235,8 +235,10 @@ pub fn init() -> RawFd {
         let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
         assert_eq!(ret, 0, "pipe() failed");
 
-        // Non-blocking read so the poll loop doesn't stall.
+        // Non-blocking on both ends: reads don't stall the poll loop, writes
+        // don't stall the tap callback if the buffer is ever unexpectedly full.
         unsafe { libc::fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK) };
+        unsafe { libc::fcntl(fds[1], libc::F_SETFL, libc::O_NONBLOCK) };
 
         PIPE_WRITE_FD.store(fds[1], Ordering::Release);
         PIPE_READ_FD.store(fds[0], Ordering::Release);
@@ -251,17 +253,18 @@ pub fn init() -> RawFd {
 /// Returns (keyd_code, pressed) or None when the pipe is empty.
 pub fn read_one_event() -> Option<(u16, bool)> {
     let fd = PIPE_READ_FD.load(Ordering::Relaxed);
-    let mut buf = [0u8; 3];
-    let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, 3) };
-    if n != 3 {
-        return None;
-    }
-    let cgkey = u16::from_ne_bytes([buf[0], buf[1]]);
-    let pressed = buf[2] != 0;
-    let keyd_code = crate::macos::keycodes::cgkey_to_keyd(cgkey);
-    if keyd_code == 0 {
-        None
-    } else {
-        Some((keyd_code, pressed))
+    loop {
+        let mut buf = [0u8; 3];
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, 3) };
+        if n != 3 {
+            return None; // pipe empty (EAGAIN) or error
+        }
+        let cgkey = u16::from_ne_bytes([buf[0], buf[1]]);
+        let pressed = buf[2] != 0;
+        let keyd_code = crate::macos::keycodes::cgkey_to_keyd(cgkey);
+        if keyd_code != 0 {
+            return Some((keyd_code, pressed));
+        }
+        // unmapped CGKeyCode — consume the record and try the next one
     }
 }
