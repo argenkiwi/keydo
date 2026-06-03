@@ -1,7 +1,6 @@
-use crate::config::{Config, Action, LayerType, Layer};
-use crate::keys::{KeyCode, get_key_name, modifiers};
+use crate::config::{Config, Action, LayerType};
+use crate::keys::modifiers;
 use std::collections::HashMap;
-use std::time::{Instant, Duration};
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
@@ -66,7 +65,7 @@ pub struct Keyboard {
     pub current_time: u128,
     pub pending_timeout: Option<PendingTimeout>,
     pub pending_overload: Option<PendingOverload>,
-    
+
     pub oneshot_latch: bool,
     pub oneshot_timeout: u128,
 
@@ -75,6 +74,9 @@ pub struct Keyboard {
     pub chord_match: Option<(usize, usize)>, // layer_idx, chord_idx
     pub chord_last_code_time: u128,
     pub active_chords: Vec<ActiveChord>,
+
+    pub scroll_active: bool,
+    pub scroll_speed: i16,
 }
 
 impl Keyboard {
@@ -98,6 +100,8 @@ impl Keyboard {
             last_repeatable_action: None,
             current_time: 0,
             pending_timeout: None,
+            scroll_active: false,
+            scroll_speed: 1,
             pending_overload: None,
             oneshot_latch: false,
             oneshot_timeout: 0,
@@ -117,7 +121,7 @@ impl Keyboard {
         self.current_time
     }
 
-    pub fn process_event(&mut self, code: u16, pressed: bool) -> Vec<KeyEvent> {
+    pub fn process_event(&mut self, code: u16, pressed: bool) -> Vec<OutputEvent> {
         let mut events = Vec::new();
         let time = self.get_time_ms();
 
@@ -163,7 +167,7 @@ impl Keyboard {
         events
     }
 
-    fn handle_chord(&mut self, code: u16, pressed: bool, time: u128, events: &mut Vec<KeyEvent>) -> bool {
+    fn handle_chord(&mut self, code: u16, pressed: bool, time: u128, events: &mut Vec<OutputEvent>) -> bool {
         if code != 0 && !pressed {
             for ac in &mut self.active_chords {
                 if ac.active {
@@ -308,7 +312,7 @@ impl Keyboard {
         if pressed_keys.len() == chord.keys.len() { 2 } else { 1 }
     }
 
-    fn resolve_chord(&mut self, events: &mut Vec<KeyEvent>) -> bool {
+    fn resolve_chord(&mut self, events: &mut Vec<OutputEvent>) -> bool {
         self.chord_state = ChordState::Resolving;
         let mut queue_offset = 0;
         if let Some((l_idx, c_idx)) = self.chord_match {
@@ -334,12 +338,12 @@ impl Keyboard {
         true
     }
 
-    fn abort_chord(&mut self, events: &mut Vec<KeyEvent>) -> bool {
+    fn abort_chord(&mut self, events: &mut Vec<OutputEvent>) -> bool {
         self.chord_match = None;
         self.resolve_chord(events)
     }
 
-    fn handle_pending_timeout(&mut self, code: u16, pressed: bool, time: u128, events: &mut Vec<KeyEvent>) -> bool {
+    fn handle_pending_timeout(&mut self, code: u16, pressed: bool, time: u128, events: &mut Vec<OutputEvent>) -> bool {
         if let Some(pt) = self.pending_timeout.take() {
             if !pressed && code == pt.code && time == pt.activation_time {
                 self.pending_timeout = Some(pt);
@@ -369,7 +373,7 @@ impl Keyboard {
         false
     }
 
-    fn handle_pending_overload(&mut self, code: u16, pressed: bool, time: u128, events: &mut Vec<KeyEvent>) -> bool {
+    fn handle_pending_overload(&mut self, code: u16, pressed: bool, time: u128, events: &mut Vec<OutputEvent>) -> bool {
         if let Some(mut po) = self.pending_overload.take() {
             if code != 0 {
                 if !pressed {
@@ -457,7 +461,7 @@ impl Keyboard {
         }
     }
 
-    fn execute_action(&mut self, code: u16, action: Action, dl: usize, pressed: bool, time: u128, events: &mut Vec<KeyEvent>) {
+    fn execute_action(&mut self, code: u16, action: Action, dl: usize, pressed: bool, time: u128, events: &mut Vec<OutputEvent>) {
         if pressed {
             self.last_pressed_code = code;
         }
@@ -633,11 +637,110 @@ impl Keyboard {
                     self.deactivate_layer(l_idx as usize);
                 }
             }
-            _ => {}
+            Action::SwapMacro(l_idx, m_idx) => {
+                if pressed {
+                    let m = self.config.macros[m_idx as usize].clone();
+                    self.execute_macro(&m, events);
+                    if self.layer_states[dl].toggled {
+                        self.deactivate_layer(dl);
+                        self.layer_states[dl].toggled = false;
+                        self.activate_layer(l_idx as usize);
+                        self.layer_states[l_idx as usize].toggled = true;
+                    } else {
+                        self.deactivate_layer(dl);
+                        self.activate_layer(l_idx as usize);
+                    }
+                    self.update_mods(usize::MAX, 0, events);
+                }
+            }
+            Action::ClearMacro(m_idx) => {
+                if pressed {
+                    let m = self.config.macros[m_idx as usize].clone();
+                    self.execute_macro(&m, events);
+                    self.clear_all(events);
+                }
+            }
+            Action::ToggleMacro(l_idx, m_idx) => {
+                if pressed {
+                    let m = self.config.macros[m_idx as usize].clone();
+                    self.execute_macro(&m, events);
+                    self.layer_states[l_idx as usize].toggled = !self.layer_states[l_idx as usize].toggled;
+                    if self.layer_states[l_idx as usize].toggled {
+                        self.activate_layer(l_idx as usize);
+                    } else {
+                        self.deactivate_layer(l_idx as usize);
+                    }
+                    self.update_mods(usize::MAX, 0, events);
+                }
+            }
+            Action::Repeat => {
+                if pressed {
+                    if let Some(action) = self.last_repeatable_action {
+                        self.execute_action(code, action, dl, true, time, events);
+                        self.execute_action(code, action, dl, false, time, events);
+                    }
+                }
+            }
+            Action::Command(idx) => {
+                if pressed {
+                    let cmd = self.config.commands[idx as usize].cmd.clone();
+                    events.push(OutputEvent::Command(cmd));
+                }
+            }
+            Action::Macro2(timeout, _repeat_timeout, m_idx) => {
+                if pressed {
+                    self.clear_oneshot(events);
+                    self.execute_macro_by_idx(m_idx as usize, events);
+                    // Repeat scheduling is handled externally via the timeout field.
+                    // timeout == 0 means no repeat.
+                    let _ = timeout;
+                }
+            }
+            Action::Scroll(speed) => {
+                if pressed {
+                    self.scroll_active = true;
+                    self.scroll_speed = speed;
+                    events.push(OutputEvent::Scroll(0, speed as i32));
+                } else {
+                    self.scroll_active = false;
+                }
+            }
+            Action::ScrollToggle(l_idx) => {
+                if pressed {
+                    self.scroll_active = !self.scroll_active;
+                    if self.scroll_active {
+                        self.activate_layer(l_idx as usize);
+                    } else {
+                        self.deactivate_layer(l_idx as usize);
+                    }
+                    self.update_mods(usize::MAX, 0, events);
+                }
+            }
+            Action::ScrollToggleOn(l_idx) => {
+                if pressed {
+                    self.scroll_active = true;
+                    self.activate_layer(l_idx as usize);
+                    self.update_mods(usize::MAX, 0, events);
+                }
+            }
+            Action::ScrollToggleOff => {
+                if pressed {
+                    self.scroll_active = false;
+                    self.update_mods(usize::MAX, 0, events);
+                }
+            }
+            Action::Noop => {}
+        }
+
+        // Track the last action that can be repeated (simple key sequences).
+        if pressed {
+            if let Action::KeySequence(_, _) | Action::Macro(_) | Action::Macro2(_, _, _) = action {
+                self.last_repeatable_action = Some(action);
+            }
         }
     }
 
-    fn set_layout(&mut self, idx: usize, events: &mut Vec<KeyEvent>) {
+    fn set_layout(&mut self, idx: usize, events: &mut Vec<OutputEvent>) {
         self.clear_all(events);
         for i in 1..self.layer_states.len() {
             if self.config.layers[i].layer_type == LayerType::Layout {
@@ -651,7 +754,7 @@ impl Keyboard {
         self.update_mods(usize::MAX, 0, events);
     }
 
-    fn clear_all(&mut self, events: &mut Vec<KeyEvent>) {
+    fn clear_all(&mut self, events: &mut Vec<OutputEvent>) {
         self.clear_oneshot(events);
         for i in 1..self.layer_states.len() {
             if self.config.layers[i].layer_type != LayerType::Layout {
@@ -664,7 +767,7 @@ impl Keyboard {
         self.reset_keystate(events);
     }
 
-    fn reset_keystate(&mut self, events: &mut Vec<KeyEvent>) {
+    fn reset_keystate(&mut self, events: &mut Vec<OutputEvent>) {
         for i in 0..256 {
             if self.keystate[i] {
                 self.send_key(i as u16, false, events);
@@ -672,10 +775,11 @@ impl Keyboard {
         }
     }
 
-    fn execute_macro(&mut self, m: &crate::config::Macro, events: &mut Vec<KeyEvent>) {
+    fn execute_macro(&mut self, m: &crate::config::Macro, events: &mut Vec<OutputEvent>) {
+        use crate::config::MacroEntryType;
         for entry in &m.entries {
             match entry.entry_type {
-                crate::config::MacroEntryType::KeySequence => {
+                MacroEntryType::KeySequence => {
                     let code = entry.data & 0xFF;
                     let mods = (entry.data >> 8) as u8;
                     self.update_mods(usize::MAX, mods, events);
@@ -683,19 +787,44 @@ impl Keyboard {
                     self.send_key(code, false, events);
                     self.update_mods(usize::MAX, 0, events);
                 }
-                _ => {
-                    // TODO: Handle hold/release/timeout/unicode in macros
+                MacroEntryType::Hold => {
+                    self.send_key(entry.data, true, events);
+                }
+                MacroEntryType::Release => {
+                    // Release all currently held macro keys.
+                    for code in 0..256u16 {
+                        if self.keystate[code as usize] {
+                            self.send_key(code, false, events);
+                        }
+                    }
+                }
+                MacroEntryType::Timeout => {
+                    // Flush output events synchronously then sleep.
+                    std::thread::sleep(std::time::Duration::from_millis(entry.data as u64));
+                }
+                MacroEntryType::Unicode => {
+                    let seq = crate::unicode::unicode_get_sequence(entry.data as usize);
+                    for &c in &seq {
+                        if c != 0 {
+                            self.send_key(c, true, events);
+                            self.send_key(c, false, events);
+                        }
+                    }
                 }
             }
         }
     }
 
-    fn execute_macro_by_idx(&mut self, idx: usize, events: &mut Vec<KeyEvent>) {
+    fn execute_macro_by_idx(&mut self, idx: usize, events: &mut Vec<OutputEvent>) {
         let m = self.config.macros[idx].clone();
         self.execute_macro(&m, events);
     }
 
-    fn clear_oneshot(&mut self, events: &mut Vec<KeyEvent>) {
+    pub fn execute_macro_pub(&mut self, m: &crate::config::Macro, events: &mut Vec<OutputEvent>) {
+        self.execute_macro(m, events);
+    }
+
+    fn clear_oneshot(&mut self, events: &mut Vec<OutputEvent>) {
         for i in 0..self.layer_states.len() {
             while self.layer_states[i].oneshot_depth > 0 {
                 self.deactivate_layer(i);
@@ -707,7 +836,7 @@ impl Keyboard {
         self.update_mods(usize::MAX, 0, events);
     }
 
-    fn update_mods(&mut self, excluded_layer_idx: usize, mut mods: u8, events: &mut Vec<KeyEvent>) -> u8 {
+    fn update_mods(&mut self, excluded_layer_idx: usize, mut mods: u8, events: &mut Vec<OutputEvent>) -> u8 {
         for i in 0..self.config.layers.len() {
             if self.layer_states[i].active > 0 {
                 let is_excluded = if i == excluded_layer_idx {
@@ -728,7 +857,7 @@ impl Keyboard {
         mods
     }
 
-    fn set_mods(&mut self, mods: u8, events: &mut Vec<KeyEvent>) {
+    fn set_mods(&mut self, mods: u8, events: &mut Vec<OutputEvent>) {
         for m in modifiers() {
             if (m.mask & mods) != 0 {
                 if !self.keystate[m.key as usize] {
@@ -742,13 +871,13 @@ impl Keyboard {
         }
     }
 
-    fn send_key(&mut self, code: u16, pressed: bool, events: &mut Vec<KeyEvent>) {
+    fn send_key(&mut self, code: u16, pressed: bool, events: &mut Vec<OutputEvent>) {
         if self.keystate[code as usize] != pressed {
             self.keystate[code as usize] = pressed;
             if pressed {
                 self.last_pressed_output_code = code;
             }
-            events.push(KeyEvent { code, pressed });
+            events.push(OutputEvent::Key(code, pressed));
         }
     }
 
@@ -764,8 +893,17 @@ impl Keyboard {
     }
 }
 
+/// Internal queue entry for unprocessed input events (chord/overload queues).
 #[derive(Clone, Copy)]
 pub struct KeyEvent {
     pub code: u16,
     pub pressed: bool,
+}
+
+/// Output event produced by the keyboard processor.
+#[derive(Clone)]
+pub enum OutputEvent {
+    Key(u16, bool),
+    Scroll(i32, i32),
+    Command(String),
 }

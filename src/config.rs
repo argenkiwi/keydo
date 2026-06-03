@@ -1,4 +1,3 @@
-use crate::keys::{KeyCode, MOD_SHIFT};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

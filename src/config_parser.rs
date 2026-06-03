@@ -1,9 +1,9 @@
 use crate::config::*;
-use crate::ini::{parse_ini_string, Ini};
-use crate::keys::{lookup_keycode, parse_key_sequence, MOD_SHIFT};
+use crate::ini::parse_ini_string;
+use crate::keys::lookup_keycode;
 use crate::macro_parser::parse_macro;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::fs;
 
 pub struct ConfigParser {
@@ -324,7 +324,7 @@ impl ConfigParser {
                     }
                     "lettermod" => {
                         let layer_idx = self.get_layer_idx(&args[0])?;
-                        let key_code = self.resolve_key(&args[1]).ok_or_else(|| anyhow::anyhow!("Invalid key: {}", args[1]))?;
+                        let _key_code = self.resolve_key(&args[1]).ok_or_else(|| anyhow::anyhow!("Invalid key: {}", args[1]))?;
                         let idle_timeout = args[2].parse().unwrap_or(0);
                         let hold_timeout = args[3].parse().unwrap_or(0);
                         

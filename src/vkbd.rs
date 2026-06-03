@@ -1,5 +1,5 @@
-use evdev::{uinput::VirtualDevice, uinput::VirtualDeviceBuilder, AttributeSet, Key, RelativeAxisType, AbsoluteAxisType, InputEvent, EventType, UinputAbsSetup, AbsInfo};
-use std::io::Write;
+use evdev::{uinput::VirtualDevice, uinput::VirtualDeviceBuilder, AttributeSet, EventType, InputEvent, Key, RelativeAxisType};
+use crate::keyboard::OutputEvent;
 
 pub struct Vkbd {
     device: VirtualDevice,
@@ -25,15 +25,10 @@ impl Vkbd {
         rel_axes.insert(RelativeAxisType::REL_WHEEL);
         rel_axes.insert(RelativeAxisType::REL_HWHEEL);
 
-        let mut abs_axes = AttributeSet::<AbsoluteAxisType>::new();
-        abs_axes.insert(AbsoluteAxisType::ABS_X);
-        abs_axes.insert(AbsoluteAxisType::ABS_Y);
-
         let device = VirtualDeviceBuilder::new()?
             .name(name)
             .with_keys(&keys)?
             .with_relative_axes(&rel_axes)?
-            // TODO: properly setup absolute axes with range
             .build()?;
 
         Ok(Vkbd { device })
@@ -43,6 +38,40 @@ impl Vkbd {
         let ev = InputEvent::new(EventType::KEY, code, if pressed { 1 } else { 0 });
         self.device.emit(&[ev])?;
         Ok(())
+    }
+
+    pub fn as_raw_fd(&self) -> i32 {
+        use std::os::unix::io::AsRawFd;
+        self.device.as_raw_fd()
+    }
+
+    /// Drain any LED events the virtual device received from userspace.
+    /// Returns (led_code, on) pairs.
+    pub fn drain_led_events(&mut self) -> Vec<(u16, bool)> {
+        let mut out = Vec::new();
+        if let Ok(events) = self.device.fetch_events() {
+            for ev in events {
+                if ev.event_type() == EventType::LED {
+                    out.push((ev.code(), ev.value() != 0));
+                }
+            }
+        }
+        out
+    }
+
+    pub fn send_event(&mut self, ev: &OutputEvent) -> anyhow::Result<()> {
+        match ev {
+            OutputEvent::Key(code, pressed) => self.send_key(*code, *pressed),
+            OutputEvent::Scroll(x, y) => self.mouse_scroll(*x, *y),
+            OutputEvent::Command(cmd) => {
+                std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd)
+                    .spawn()
+                    .ok();
+                Ok(())
+            }
+        }
     }
 
     pub fn mouse_move(&mut self, x: i32, y: i32) -> anyhow::Result<()> {

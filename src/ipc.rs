@@ -1,5 +1,5 @@
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use serde::{Serialize, Deserialize};
 
@@ -39,4 +39,11 @@ pub fn create_server() -> anyhow::Result<UnixListener> {
 
 pub fn connect() -> anyhow::Result<UnixStream> {
     Ok(UnixStream::connect(SOCKET_PATH)?)
+}
+
+pub fn send_message(msg: &IpcMessage) -> anyhow::Result<()> {
+    let mut stream = connect()?;
+    let buf = serde_json::to_vec(msg)?;
+    stream.write_all(&buf)?;
+    Ok(())
 }

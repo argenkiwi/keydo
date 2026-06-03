@@ -1,6 +1,5 @@
-use crate::config::{DeviceId, ID_KEYBOARD, ID_MOUSE, ID_TRACKPAD, ID_KEY};
-use evdev::{Device, InputEvent, Key};
-use std::collections::HashSet;
+use crate::config::{DeviceId, ID_EXCLUDED, ID_KEYBOARD, ID_MOUSE, ID_TRACKPAD, ID_KEY};
+use evdev::{Device, EventType, InputEvent, Key};
 use std::path::Path;
 use std::fs;
 
@@ -74,6 +73,33 @@ impl EvdevDevice {
 
     pub fn ungrab(&mut self) -> std::io::Result<()> {
         self.device.ungrab()
+    }
+
+    pub fn set_led(&mut self, led_code: u16, on: bool) {
+        let ev = InputEvent::new(EventType::LED, led_code, if on { 1 } else { 0 });
+        let _ = self.device.send_events(&[ev]);
+    }
+
+    /// Returns whether this device should be grabbed according to the config.
+    /// Mirrors keyd's config_check_match + manage_device logic.
+    /// Returns true if the device should be grabbed, false if excluded or unmatched.
+    pub fn should_grab(&self, ids: &[DeviceId], wildcard: bool) -> bool {
+        let flags = self.capabilities;
+        for id_entry in ids {
+            if self.id.starts_with(&id_entry.id) {
+                if id_entry.flags & ID_EXCLUDED != 0 {
+                    return false;
+                }
+                if id_entry.flags & flags != 0 {
+                    return true;
+                }
+            }
+        }
+        // Wildcard matches keyboards that are not trackpads.
+        if wildcard {
+            return (flags & ID_KEYBOARD != 0) && (flags & ID_TRACKPAD == 0);
+        }
+        false
     }
 }
 

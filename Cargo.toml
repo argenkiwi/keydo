@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
-nix = { version = "0.27", features = ["fs", "ioctl", "poll", "sched", "mman", "uio", "socket"] }
+nix = { version = "0.27", features = ["fs", "ioctl", "poll", "sched", "mman", "uio", "socket", "signal", "inotify"] }
+signal-hook = "0.3"
 evdev = "0.12"
 anyhow = "1.0"
 log = "0.4"

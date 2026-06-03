@@ -1,5 +1,5 @@
 use crate::config::{Macro, MacroEntry, MacroEntryType};
-use crate::keys::{lookup_keycode, parse_key_sequence, MOD_SHIFT};
+use crate::keys::lookup_keycode;
 
 pub fn parse_macro(s: &str) -> Result<Macro, String> {
     let mut entries = Vec::new();
