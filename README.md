@@ -8,6 +8,11 @@
 
 Unlike many macOS remappers that rely on simple key swaps, `keydo` captures input at a low level using `CGEventTap`, allowing for complex stateful transformations like multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held).
 
+The name **keydo** carries a triple meaning:
+- **keyd oxidised:** A tribute to its roots in `keyd`, now reimagined in Rust.
+- **key do:** A direct command, ordering your keys to perform exactly as you wish.
+- **The Way of the Key:** Inspired by the Japanese *dō* (道), signifying the path or discipline of mastering your input.
+
 ## Key Features
 
 - **Layer Support:** Create custom keyboard layers triggered by any key.
