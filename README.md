@@ -1,74 +1,60 @@
 # keydo
 
-A keyboard remapping daemon for macOS, ported from [keyd](https://github.com/rvaiya/keyd).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/platform-macOS-blue.svg)](https://www.apple.com/macos/)
+[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
 
-keydo implements the same configuration language and daemon architecture as keyd — layers,
-chords, overloads, macros, and IPC — using the macOS CGEventTap API for keyboard capture
-and injection instead of Linux evdev.
+**keydo** is a powerful keyboard remapping daemon for macOS, faithfully ported from [keyd](https://github.com/rvaiya/keyd). It brings the flexibility of Linux-style keyboard customization to macOS, implementing layers, chords, overloads, macros, and a full IPC protocol using native macOS APIs.
 
-## Status
+Unlike many macOS remappers that rely on simple key swaps, `keydo` captures input at a low level using `CGEventTap`, allowing for complex stateful transformations like multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held).
 
-Early development / personal use. Compatibility with the full keyd configuration surface
-area is in progress.
+## Key Features
 
-## Requirements
+- **Layer Support:** Create custom keyboard layers triggered by any key.
+- **Overloads:** Assign different behaviors to a key when tapped vs. held.
+- **Chords:** Trigger actions by pressing multiple keys simultaneously.
+- **Macros:** Execute complex sequences of keys and text.
+- **IPC Protocol:** Interact with the running daemon to reload configs, inject input, or monitor state.
+- **Native macOS Backend:** Uses `CGEventTap` for capture and `CGEventPost` for injection (no kernel extensions required).
 
-- macOS (tested on macOS 13+)
-- Rust toolchain (edition 2024, stable)
-- Accessibility permission granted to the terminal or binary
-  (System Settings → Privacy & Security → Accessibility)
+## Prerequisites
 
-## Build
+- **OS:** macOS 13.0 or later.
+- **Permissions:** `keydo` requires **Accessibility** permissions to capture and inject keyboard events.
+- **Rust:** A modern Rust toolchain (Edition 2024).
 
-```sh
-cargo build --release
-```
+## Getting Started
 
-The compiled binary is at `target/release/keydo`.
+### Installation
 
-## Install
+1. **Build the project:**
+   ```bash
+   cargo build --release
+   ```
 
-```sh
-sudo cp target/release/keydo /usr/local/bin/keydo
-```
+2. **Install the binary:**
+   ```bash
+   sudo cp target/release/keydo /usr/local/bin/keydo
+   ```
 
-## Usage
+3. **Grant Permissions:**
+   Go to **System Settings** → **Privacy & Security** → **Accessibility** and add either your Terminal (for testing) or the `keydo` binary.
 
-Configuration files follow the keyd `.conf` format and are read from `/etc/keyd/`.
+### Configuration
 
-```sh
-# Start the daemon (reads /etc/keyd/*.conf)
-sudo keydo daemon
+`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `/etc/keyd/`.
 
-# Start with a specific config file
-sudo keydo daemon --config ~/.config/keydo/default.conf
+> [!TIP]
+> Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scd) for a full reference of the configuration syntax.
 
-# Validate config files for errors
-keydo check /path/to/config.conf
-
-# List all valid key names
-keydo list-keys
-
-# Monitor key events (requires Accessibility permission)
-sudo keydo monitor
-
-# Signal running daemon to reload configs
-keydo reload
-```
-
-## Configuration
-
-keydo uses the same configuration syntax as keyd. See the
-[keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scd) for the
-full reference.
-
-Example `/etc/keyd/default.conf`:
+#### Basic Example (`/etc/keyd/default.conf`)
 
 ```ini
 [ids]
 *
 
 [main]
+# Maps capslock to escape when tapped and the 'nav' layer when held.
 capslock = overload(nav, esc)
 
 [nav]
@@ -78,14 +64,37 @@ k = up
 l = right
 ```
 
-## Acknowledgements
+## Usage
 
-keydo is based on [keyd](https://github.com/rvaiya/keyd) by
-[Rahul Vaiya](https://github.com/rvaiya). The configuration language, layer/chord/macro
-architecture, and IPC protocol are derived from keyd. This project adapts that work to
-macOS using native CGEventTap and CGEventPost APIs.
+`keydo` provides a versatile CLI for managing the daemon and interacting with your keyboard.
 
-## License
+```bash
+# Start the daemon (reads /etc/keyd/*.conf)
+sudo keydo daemon
 
-MIT — see [LICENSE](LICENSE) for the full text, which includes the original copyright
-notice from the keyd project.
+# Run with a specific config file
+sudo keydo daemon --config ~/.config/keydo/work.conf
+
+# Monitor key events in real-time
+sudo keydo monitor
+
+# Validate your configuration files
+keydo check /etc/keyd/default.conf
+
+# Reload configurations without restarting the daemon
+keydo reload
+
+# List all valid key names for use in configs
+keydo list-keys
+```
+
+### Advanced Commands
+
+- **Inject Text:** `keydo input "Hello, World!"`
+- **Execute Macro:** `keydo do "C-c C-v"`
+- **Live Binding:** `keydo bind "main.j=down"`
+- **Listen for state:** `keydo listen` (streams layer changes)
+
+## Acknowledgments
+
+This project is a port of [keyd](https://github.com/rvaiya/keyd) by [Rahul Vaiya](https://github.com/rvaiya). We are grateful for his work on the original architecture and configuration language.
