@@ -1,7 +1,15 @@
 [package]
-name = "keydo"
-version = "0.1.0"
-edition = "2024"
+name        = "keydo"
+version     = "0.1.0"
+edition     = "2024"
+license     = "MIT"
+authors     = ["Leandro Peralta <leandro.peralta@gethomesafe.com>"]
+description = "A keyboard remapping daemon for macOS, ported from keyd (https://github.com/rvaiya/keyd)"
+repository  = "https://github.com/argenkiwi/keydo"
+homepage    = "https://github.com/argenkiwi/keydo"
+keywords    = ["keyboard", "remap", "daemon", "macos", "input"]
+categories  = ["command-line-utilities"]
+readme      = "README.md"
 
 [lints.rust]
 future-incompatible = "warn"
