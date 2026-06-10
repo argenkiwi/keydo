@@ -1,0 +1,44 @@
+[package]
+name = "keydo"
+version = "0.1.0"
+edition = "2024"
+
+[lints.rust]
+future-incompatible = "warn"
+nonstandard-style = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+unwrap_used = "warn"
+expect_used = "warn"
+missing_safety_doc = "warn"
+# Cast warnings: pervasive in FFI/syscall code; suppress globally and handle per-site where needed
+cast-possible-truncation = "allow"
+cast-sign-loss = "allow"
+cast-possible-wrap = "allow"
+cast-lossless = "allow"
+ptr-as-ptr = "allow"
+ptr-cast-constness = "allow"
+borrow-as-ptr = "allow"
+ref-as-ptr = "allow"
+# Pedantic suppressions not applicable to this systems codebase
+must-use-candidate = "allow"
+missing-errors-doc = "allow"
+missing-panics-doc = "allow"
+doc-markdown = "allow"
+too-many-lines = "allow"
+elidable-lifetime-names = "allow"
+# Wildcard imports are pervasive for internal prelude-like modules (config::*, keys::*)
+wildcard-imports = "allow"
+similar-names = "allow"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+env_logger = "0.11.10"
+libc = "0.2.186"
+log = "0.4.32"
+nix = "0.31.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify = "0.11.2"
