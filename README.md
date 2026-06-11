@@ -102,4 +102,4 @@ keydo list-keys
 
 ## Acknowledgments
 
-This project is a port of [keyd](https://github.com/rvaiya/keyd) by [Rahul Vaiya](https://github.com/rvaiya). We are grateful for his work on the original architecture and configuration language.
+This project is a port of [keyd](https://github.com/rvaiya/keyd) by [Raheman Vaiya](https://github.com/rvaiya). We are grateful for his work on the original architecture and configuration language.
