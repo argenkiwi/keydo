@@ -43,7 +43,7 @@ impl TryFrom<u32> for IpcMessageType {
 }
 
 /// Binary-compatible with C's `struct ipc_message` (64-bit layout):
-///   u32 type | u32 timeout | u8[4096] data | u64 sz
+///   u32 type | u32 timeout | u8\[4096\] data | u64 sz
 #[repr(C)]
 pub struct IpcMessage {
     pub msg_type: u32,
