@@ -2,6 +2,8 @@
 
 use crate::config::*;
 use crate::config_parse::*;
+use crate::config_validate::{validate, Severity};
+use crate::error::KeydoError;
 use crate::ini::*;
 use crate::keys::*;
 
@@ -29,7 +31,6 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
                 keys[sz] = code;
                 sz += 1;
             } else {
-                // Try alias
                 let mut found_alias = false;
                 for alias in &config.aliases {
                     if alias.0 == part && let Some((code, _)) = parse_key_sequence(&alias.1) {
@@ -40,7 +41,6 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
                     }
                 }
                 if !found_alias {
-                    // C-style alias lookup by name
                     for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
                         if let Some(name) = ent.name && (name == part || ent.alt_name == Some(part)) {
                             keys[sz] = i as u8;
@@ -62,14 +62,11 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
         }
     } else {
         let mut found = false;
-        // Check exact aliases first (like C's strcpy(config->aliases[code], name))
-        // Actually C checks all aliases: for (i = 0; i < 256; i++) if (!strcmp(config->aliases[i], key)) ...
-        // Our aliases are (alias_name, target_name).
         let aliases_to_check: Vec<String> = config.aliases.iter()
             .filter(|(name, _target)| name == key)
             .map(|(_name, target)| target.clone())
             .collect();
-        
+
         for target in aliases_to_check {
             if let Some((code, _)) = parse_key_sequence(&target) {
                 config.layers[layer_idx].keymap[code as usize] = d;
@@ -81,7 +78,6 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
             if let Some((code, _)) = parse_key_sequence(key) {
                 config.layers[layer_idx].keymap[code as usize] = d;
             } else {
-                // Try one more time with general alias lookup (target matches key)
                 for alias in &config.aliases {
                     if alias.1 == key && let Some((code, _)) = parse_key_sequence(&alias.0) {
                         config.layers[layer_idx].keymap[code as usize] = d;
@@ -92,8 +88,9 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
     }
 }
 
-pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, String> {
-    let ini = ini_parse_string(content, None).ok_or("Failed to parse INI")?;
+pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, KeydoError> {
+    let ini = ini_parse_string(content, None)
+        .ok_or_else(|| KeydoError::ConfigSyntax { file: String::new(), line: 0, msg: "Failed to parse INI".to_string() })?;
     let mut ctx = ParseCtx::new();
 
     // First pass: identify layers
@@ -109,7 +106,7 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
         }
     }
 
-    // Default layers — main is always a layout layer (mirrors C's `[main:layout]` default)
+    // Default layers — main is always a layout layer
     let main_idx = create_layer(config, "main", LayerType::Normal);
     config.layers[main_idx].layer_type = LayerType::Layout;
     let control_idx = create_layer(config, "control", LayerType::Normal);
@@ -201,9 +198,12 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
             }
         } else {
             let layer_idx = config_get_layer_index(config, &section.name)
-                .ok_or_else(|| format!("internal error: layer '{}' missing after first pass", section.name))?;
-            
-            // Handle composite layer constituents
+                .ok_or_else(|| KeydoError::ConfigSyntax {
+                    file: ctx.current_file.clone().unwrap_or_default(),
+                    line: ctx.current_line,
+                    msg: format!("internal error: layer '{}' missing after first pass", section.name),
+                })?;
+
             if section.name.contains('+') {
                 let parts: Vec<&str> = section.name.split('+').collect();
                 let mut constituents = [0; 8];
@@ -221,7 +221,7 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
 
             for entry in &section.entries {
                 ctx.current_line = entry.lnum - 1;
-                
+
                 if let Some(ref val) = entry.val {
                     let desc = config_parse_descriptor(val, config, &mut ctx)?;
                     set_layer_entry(config, layer_idx, &entry.key, desc);
@@ -230,8 +230,7 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
         }
     }
 
-    // Merge constituent keymaps into composite layers (explicit entries take priority).
-    // Collect first to avoid borrow conflicts, then apply.
+    // Merge constituent keymaps into composite layers
     let mut merges: Vec<(usize, usize, Descriptor)> = Vec::new();
     for i in 0..config.layers.len() {
         if config.layers[i].layer_type != LayerType::Composite {
@@ -273,9 +272,9 @@ pub fn config_check_match(config: &Config, id: &str, flags: u8) -> i32 {
     i32::from(config.wildcard != 0)
 }
 
-pub fn config_parse(path: &str) -> Result<Config, String> {
+pub fn config_parse(path: &str) -> Result<Config, KeydoError> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {path}: {e}"))?;
+        .map_err(|e| KeydoError::ConfigIo { path: path.to_string(), source: e })?;
 
     let config_dir = std::path::Path::new(path)
         .parent()
@@ -286,10 +285,19 @@ pub fn config_parse(path: &str) -> Result<Config, String> {
     let mut config = Config::new();
     config_parse_string(&mut config, &preprocessed)?;
     config.path = path.to_string();
+
+    // Semantic validation pass: catch index-out-of-bounds and cycles before runtime.
+    for ve in validate(&config) {
+        match ve.severity {
+            Severity::Error   => return Err(KeydoError::ConfigSemantic(ve.message)),
+            Severity::Warning => eprintln!("WARNING: {}: {}", path, ve.message),
+        }
+    }
+
     Ok(config)
 }
 
-fn preprocess_includes(content: &str, config_dir: &std::path::Path) -> Result<String, String> {
+fn preprocess_includes(content: &str, config_dir: &std::path::Path) -> Result<String, KeydoError> {
     let mut result = String::new();
     for line in content.lines() {
         let trimmed = line.trim_start();
@@ -298,7 +306,7 @@ fn preprocess_includes(content: &str, config_dir: &std::path::Path) -> Result<St
             match resolve_include_path(config_dir, include_path_str) {
                 Ok(resolved) => {
                     let included = std::fs::read_to_string(&resolved)
-                        .map_err(|e| format!("Failed to open include {resolved}: {e}"))?;
+                        .map_err(|e| KeydoError::ConfigIo { path: resolved.clone(), source: e })?;
                     let included_dir = std::path::Path::new(&resolved)
                         .parent()
                         .map_or_else(|| config_dir.to_path_buf(), std::path::Path::to_path_buf);
@@ -318,7 +326,7 @@ fn preprocess_includes(content: &str, config_dir: &std::path::Path) -> Result<St
     Ok(result)
 }
 
-fn resolve_include_path(config_dir: &std::path::Path, include_path: &str) -> Result<String, String> {
+fn resolve_include_path(config_dir: &std::path::Path, include_path: &str) -> Result<String, KeydoError> {
     let candidate = config_dir.join(include_path);
     if candidate.exists() {
         return Ok(candidate.to_string_lossy().into_owned());
@@ -328,25 +336,27 @@ fn resolve_include_path(config_dir: &std::path::Path, include_path: &str) -> Res
     if candidate.exists() {
         return Ok(candidate.to_string_lossy().into_owned());
     }
-    Err(format!("Failed to resolve include path: {include_path}"))
+    Err(KeydoError::Other(format!("Failed to resolve include path: {include_path}")))
 }
 
-pub fn config_add_entry(config: &mut Config, exp: &str) -> Result<(), String> {
+pub fn config_add_entry(config: &mut Config, exp: &str) -> Result<(), KeydoError> {
     let parts: Vec<&str> = exp.split('=').collect();
     if parts.len() != 2 {
-        return Err("Invalid entry expression".to_string());
+        return Err(KeydoError::Other("Invalid entry expression".to_string()));
     }
     let key_parts: Vec<&str> = parts[0].trim().split('.').collect();
     if key_parts.len() != 2 {
-        return Err("Invalid key part".to_string());
+        return Err(KeydoError::Other("Invalid key part".to_string()));
     }
     let layer_name = key_parts[0];
     let key_name = key_parts[1];
     let val = parts[1].trim();
 
-    let layer_idx = config_get_layer_index(config, layer_name).ok_or_else(|| format!("Layer {layer_name} not found"))?;
-    let (code, _) = parse_key_sequence(key_name).ok_or_else(|| format!("Invalid key {key_name}"))?;
-    
+    let layer_idx = config_get_layer_index(config, layer_name)
+        .ok_or_else(|| KeydoError::Other(format!("Layer {layer_name} not found")))?;
+    let (code, _) = parse_key_sequence(key_name)
+        .ok_or_else(|| KeydoError::Other(format!("Invalid key {key_name}")))?;
+
     let mut ctx = ParseCtx::new();
     let desc = config_parse_descriptor(val, config, &mut ctx)?;
     config.layers[layer_idx].keymap[code as usize] = desc;

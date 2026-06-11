@@ -6,6 +6,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 
+use crate::error::KeydoError;
+
 pub const SOCKET_PATH: &str = "/var/run/keyd.socket";
 
 /// Maximum payload size for an IPC message, matching C's `struct ipc_message`.
@@ -50,13 +52,20 @@ pub struct IpcMessage {
     pub sz:       u64,
 }
 
+// Compile-time guard: if the struct acquires padding the wire format breaks.
+const _: () = assert!(
+    std::mem::size_of::<IpcMessage>() == 4 + 4 + IPC_DATA_SIZE + 8,
+    "IpcMessage layout mismatch: struct has unexpected padding",
+);
+
 impl IpcMessage {
     pub fn new(msg_type: IpcMessageType, timeout: u32) -> Self {
-        // SAFETY: IpcMessage is #[repr(C)] with only integer and byte-array fields, all valid when zero-initialized.
-        let mut m: Self = unsafe { std::mem::zeroed() };
-        m.msg_type = msg_type as u32;
-        m.timeout  = timeout;
-        m
+        Self {
+            msg_type: msg_type as u32,
+            timeout,
+            data: [0u8; IPC_DATA_SIZE],
+            sz: 0,
+        }
     }
 
     pub fn set_data(&mut self, src: &[u8]) {
@@ -65,38 +74,36 @@ impl IpcMessage {
         self.sz = sz as u64;
     }
 
-    /// Borrow the payload as a str (up to sz bytes).
+    /// Borrow the payload as a str (up to sz bytes), substituting "" on non-UTF-8.
     pub fn data_str(&self) -> &str {
         let sz = (self.sz as usize).min(IPC_DATA_SIZE);
         std::str::from_utf8(&self.data[..sz]).unwrap_or("")
     }
 
-    /// Write the entire fixed-size struct to a writer.
+    /// Write the struct to a writer using field-by-field I/O (no unsafe).
     pub fn write_to(&self, w: &mut dyn Write) -> io::Result<()> {
-        // SAFETY: `self` is a valid reference; casting to *const u8 and taking size_of::<Self>()
-        // bytes is safe because IpcMessage is #[repr(C)] with no padding or non-byte-addressable fields.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                self as *const _ as *const u8,
-                std::mem::size_of::<Self>(),
-            )
-        };
-        w.write_all(bytes)
+        w.write_all(&self.msg_type.to_ne_bytes())?;
+        w.write_all(&self.timeout.to_ne_bytes())?;
+        w.write_all(&self.data)?;
+        w.write_all(&self.sz.to_ne_bytes())
     }
 
-    /// Read a complete fixed-size struct from a reader.
+    /// Read a complete struct from a reader using field-by-field I/O (no unsafe).
     pub fn read_from(r: &mut dyn Read) -> io::Result<Self> {
-        // SAFETY: IpcMessage contains only integer and byte-array fields; all-zero bytes are a valid state.
-        let mut m: Self = unsafe { std::mem::zeroed() };
-        // SAFETY: `m` is a valid, exclusively-owned allocation; the byte slice covers exactly size_of::<Self>() bytes.
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                &mut m as *mut _ as *mut u8,
-                std::mem::size_of::<Self>(),
-            )
-        };
-        r.read_exact(bytes)?;
-        Ok(m)
+        let mut msg_type = [0u8; 4];
+        let mut timeout  = [0u8; 4];
+        let mut data     = [0u8; IPC_DATA_SIZE];
+        let mut sz       = [0u8; 8];
+        r.read_exact(&mut msg_type)?;
+        r.read_exact(&mut timeout)?;
+        r.read_exact(&mut data)?;
+        r.read_exact(&mut sz)?;
+        Ok(Self {
+            msg_type: u32::from_ne_bytes(msg_type),
+            timeout:  u32::from_ne_bytes(timeout),
+            data,
+            sz: u64::from_ne_bytes(sz),
+        })
     }
 }
 
@@ -134,22 +141,22 @@ pub fn ipc_connect() -> io::Result<UnixStream> {
 }
 
 /// Send one IPC message and return the daemon's response data string,
-/// or an Err with the failure description if the server responds with Fail.
+/// or an error if the transport fails or the server responds with Fail.
 pub fn ipc_send_recv(
     msg_type: IpcMessageType,
     data: &[u8],
     timeout: u32,
-) -> Result<String, String> {
-    let mut stream = ipc_connect().map_err(|e| e.to_string())?;
+) -> Result<String, KeydoError> {
+    let mut stream = ipc_connect().map_err(KeydoError::IpcTransport)?;
 
     let mut msg = IpcMessage::new(msg_type, timeout);
     msg.set_data(data);
-    msg.write_to(&mut stream).map_err(|e| e.to_string())?;
+    msg.write_to(&mut stream).map_err(KeydoError::IpcTransport)?;
 
-    let resp = IpcMessage::read_from(&mut stream).map_err(|e| e.to_string())?;
+    let resp = IpcMessage::read_from(&mut stream).map_err(KeydoError::IpcTransport)?;
     let body = resp.data_str().to_string();
     match IpcMessageType::try_from(resp.msg_type) {
         Ok(IpcMessageType::Success) => Ok(body),
-        _ => Err(body),
+        _ => Err(KeydoError::IpcRemoteFailure(body)),
     }
 }

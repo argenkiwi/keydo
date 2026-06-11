@@ -1,6 +1,8 @@
+pub mod error;
 pub mod keys;
 pub mod macro_types;
 pub mod config;
+pub mod config_validate;
 pub mod ini;
 pub mod unicode;
 pub mod macro_parse;
@@ -131,14 +133,19 @@ fn read_payload(args: &[String]) -> Vec<u8> {
 
 /// Send one IPC message and exit non-zero on failure.
 fn ipc_exec(msg_type: IpcMessageType, data: &[u8], timeout: u32) {
+    use crate::error::KeydoError;
     match ipc::ipc_send_recv(msg_type, data, timeout) {
-        Ok(_)  => {}
-        Err(e) => {
-            if e.is_empty() {
+        Ok(_) => {}
+        Err(KeydoError::IpcRemoteFailure(msg)) => {
+            if msg.is_empty() {
                 eprintln!("ERROR: daemon returned failure");
             } else {
-                eprintln!("ERROR: {e}");
+                eprintln!("ERROR: {msg}");
             }
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("ERROR: {e}");
             process::exit(1);
         }
     }

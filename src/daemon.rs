@@ -176,7 +176,7 @@ impl Daemon {
 
     /// Parse a single `.conf` file and register the resulting keyboard config.
     pub fn load_config(&mut self, path: &str) -> Result<(), String> {
-        let cfg = config_parse(path)?;
+        let cfg = config_parse(path).map_err(|e| e.to_string())?;
         self.keyboards.push(Keyboard::new(cfg));
         Ok(())
     }
@@ -290,7 +290,7 @@ impl Daemon {
                         Keyboard::macro_execute_blocking(&mut out, &mac, seq_us);
                         Self::send_success(&mut conn);
                     }
-                    Err(e) => Self::send_fail(&mut conn, &e),
+                    Err(e) => Self::send_fail(&mut conn, &e.to_string()),
                 }
             }
 

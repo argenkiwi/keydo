@@ -1,6 +1,7 @@
 //! Descriptor and macro expression parsing — converts config value strings into `Descriptor` structs.
 
 use crate::config::*;
+use crate::error::KeydoError;
 use crate::macro_types::*;
 use crate::keys::*;
 use crate::macro_parse::{macro_parse, str_escape};
@@ -15,6 +16,14 @@ pub struct ParseCtx {
 impl ParseCtx {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn error(&self, msg: impl Into<String>) -> KeydoError {
+        KeydoError::ConfigSyntax {
+            file: self.current_file.clone().unwrap_or_default(),
+            line: self.current_line,
+            msg: msg.into(),
+        }
     }
 }
 
@@ -79,7 +88,6 @@ pub fn parse_fn(s: &str) -> Option<(String, Vec<String>)> {
         }
     }
     if !current_arg.trim().is_empty() || args_str.trim().is_empty() && args.is_empty() {
-         // Handle empty args case or last arg
          if !args_str.trim().is_empty() {
             args.push(current_arg.trim().to_string());
          }
@@ -88,25 +96,25 @@ pub fn parse_fn(s: &str) -> Option<(String, Vec<String>)> {
     Some((name, args))
 }
 
-pub fn config_parse_macro_expression(s: &str) -> Result<Macro, String> {
+pub fn config_parse_macro_expression(s: &str) -> Result<Macro, KeydoError> {
     if s.starts_with("macro(") && s.ends_with(')') {
         let inner = &s[6..s.len()-1];
         let escaped = str_escape(inner);
-        return macro_parse(&escaped);
+        return macro_parse(&escaped).map_err(KeydoError::Other);
     } else if let Some((_code, _mods)) = parse_key_sequence(s) {
-        return macro_parse(s);
+        return macro_parse(s).map_err(KeydoError::Other);
     } else if s.chars().count() == 1 {
-        return macro_parse(s);
+        return macro_parse(s).map_err(KeydoError::Other);
     }
-    Err("Invalid macro".to_string())
+    Err(KeydoError::Other("Invalid macro".to_string()))
 }
 
-pub fn config_parse_command(s: &str) -> Result<Command, String> {
+pub fn config_parse_command(s: &str) -> Result<Command, KeydoError> {
     if s.starts_with("command(") && s.ends_with(')') {
         let cmd = &s[8..s.len()-1];
         return Ok(Command { cmd: str_escape(cmd) });
     }
-    Err("Not a command expression".to_string())
+    Err(KeydoError::Other("Not a command expression".to_string()))
 }
 
 pub fn config_get_layer_index(config: &Config, name: &str) -> Option<usize> {
@@ -117,7 +125,7 @@ pub fn config_parse_descriptor(
     s: &str,
     config: &mut Config,
     ctx: &mut ParseCtx,
-) -> Result<Descriptor, String> {
+) -> Result<Descriptor, KeydoError> {
     if s.is_empty() {
         return Ok(Descriptor { op: Op::KeySequence, data: DescriptorData::None });
     }
@@ -179,7 +187,7 @@ pub fn config_parse_descriptor(
         // Handle lettermod special case
         if fn_name == "lettermod" {
             if args.len() != 4 {
-                return Err("lettermod requires 4 arguments".to_string());
+                return Err(ctx.error("lettermod requires 4 arguments"));
             }
             let expanded = format!("overloadi({}, overloadt2({}, {}, {}), {})", args[1], args[0], args[1], args[3], args[2]);
             return config_parse_descriptor(&expanded, config, ctx);
@@ -187,20 +195,20 @@ pub fn config_parse_descriptor(
 
         if fn_name == "oneshot" && args.len() >= 2 {
              if args.len() > 3 {
-                 return Err("oneshot supports at most 3 layers".to_string());
+                 return Err(ctx.error("oneshot supports at most 3 layers"));
              }
              let mut idxs = [-1; 3];
              for (i, arg) in args.iter().enumerate() {
                  if arg == "main" {
-                     return Err("the main layer cannot be toggled".to_string());
+                     return Err(ctx.error("the main layer cannot be toggled"));
                  }
                  if let Some(idx) = config_get_layer_index(config, arg) {
                      if config.layers[idx].layer_type == LayerType::Layout {
-                         return Err(format!("{arg} is not a valid layer"));
+                         return Err(ctx.error(format!("{arg} is not a valid layer")));
                      }
                      idxs[i] = idx as i16;
                  } else {
-                     return Err(format!("{arg} is not a valid layer"));
+                     return Err(ctx.error(format!("{arg} is not a valid layer")));
                  }
              }
              return Ok(Descriptor {
@@ -244,50 +252,47 @@ pub fn config_parse_descriptor(
         for (name, op, arg_types) in actions {
             if fn_name == name {
                 if args.len() != arg_types.len() {
-                    return Err(format!("{name} requires {} arguments", arg_types.len()));
+                    return Err(ctx.error(format!("{name} requires {} arguments", arg_types.len())));
                 }
-                
-                // We need to parse arguments. This is tricky because we might need to mutate config (for nested descriptors/macros)
-                // In Rust, we'll collect the results then build the Descriptor.
-                
+
                 let mut parsed_args = Vec::new();
                 for (i, arg_type) in arg_types.iter().enumerate() {
                     let arg_str = &args[i];
                     match *arg_type {
                         "layer" => {
                             if arg_str == "main" {
-                                return Err("the main layer cannot be toggled".to_string());
+                                return Err(ctx.error("the main layer cannot be toggled"));
                             }
                             if let Some(idx) = config_get_layer_index(config, arg_str) {
                                 if config.layers[idx].layer_type == LayerType::Layout {
-                                    return Err(format!("{arg_str} is not a valid layer"));
+                                    return Err(ctx.error(format!("{arg_str} is not a valid layer")));
                                 }
                                 parsed_args.push(idx as i16);
                             } else {
-                                return Err(format!("{arg_str} is not a valid layer"));
+                                return Err(ctx.error(format!("{arg_str} is not a valid layer")));
                             }
                         }
                         "layout" => {
                             if let Some(idx) = config_get_layer_index(config, arg_str) {
                                 if idx != 0 && config.layers[idx].layer_type != LayerType::Layout {
-                                    return Err(format!("{arg_str} is not a valid layout"));
+                                    return Err(ctx.error(format!("{arg_str} is not a valid layout")));
                                 }
                                 parsed_args.push(idx as i16);
                             } else {
-                                return Err(format!("{arg_str} is not a valid layout"));
+                                return Err(ctx.error(format!("{arg_str} is not a valid layout")));
                             }
                         }
                         "descriptor" | "keysequence_descriptor" => {
                             let desc = config_parse_descriptor(arg_str, config, ctx)?;
                             if *arg_type == "keysequence_descriptor" && desc.op != Op::KeySequence {
-                                return Err(format!("{arg_str} is not a valid keysequence"));
+                                return Err(ctx.error(format!("{arg_str} is not a valid keysequence")));
                             }
                             let idx = config.descriptors.len();
                             config.descriptors.push(desc);
                             parsed_args.push(idx as i16);
                         }
                         "timeout" | "sensitivity" => {
-                            parsed_args.push(arg_str.parse::<i16>().map_err(|_| format!("Invalid number: {arg_str}"))?);
+                            parsed_args.push(arg_str.parse::<i16>().map_err(|_| ctx.error(format!("Invalid number: {arg_str}")))?);
                         }
                         "macro" => {
                             let m = config_parse_macro_expression(arg_str)?;
@@ -317,5 +322,5 @@ pub fn config_parse_descriptor(
         }
     }
 
-    Err("invalid key or action".to_string())
+    Err(ctx.error("invalid key or action"))
 }
