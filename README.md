@@ -67,7 +67,7 @@ The name **keydo** carries a triple meaning:
 `keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `~/.config/keydo/`, falling back to `/etc/keyd/` if the former does not exist.
 
 > [!TIP]
-> Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scd) for a full reference of the configuration syntax.
+> Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scdoc) for a full reference of the configuration syntax.
 
 #### Basic Example (`~/.config/keydo/default.conf` or `/etc/keyd/default.conf`)
 
