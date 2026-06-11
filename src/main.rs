@@ -46,7 +46,7 @@ struct Cli {
 enum Commands {
     /// Start the keyd daemon (default when no subcommand is given)
     Daemon {
-        /// Load a single config file instead of scanning /etc/keyd/
+        /// Load a single config file instead of scanning default directories (~/.config/keydo/ or /etc/keyd/)
         #[arg(short, long)]
         config: Option<String>,
     },
@@ -64,7 +64,7 @@ enum Commands {
 
     /// Check config files for errors
     Check {
-        /// Files to check (all /etc/keyd/*.conf if omitted)
+        /// Files to check (all .conf files in default directories if omitted)
         files: Vec<String>,
     },
 
@@ -103,6 +103,18 @@ enum Commands {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Returns the default configuration directory.
+/// Checks ~/.config/keydo/ first, then falls back to /etc/keyd/.
+fn get_config_dir() -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = std::path::PathBuf::from(home).join(".config/keydo");
+        if path.is_dir() {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+    "/etc/keyd/".to_string()
+}
 
 /// Read a text payload: from `args` (space-joined) or stdin if args is empty.
 fn read_payload(args: &[String]) -> Vec<u8> {
@@ -158,9 +170,10 @@ fn main() {
                     process::exit(1);
                 });
             } else {
-                let n = daemon.load_configs_from_dir("/etc/keyd/");
+                let dir = get_config_dir();
+                let n = daemon.load_configs_from_dir(&dir);
                 if n == 0 {
-                    eprintln!("WARNING: no .conf files found in /etc/keyd/");
+                    eprintln!("WARNING: no .conf files found in {dir}");
                 }
             }
 
@@ -217,7 +230,8 @@ fn main() {
         // ── check ──────────────────────────────────────────────────────────
         Some(Commands::Check { files }) => {
             let paths: Vec<String> = if files.is_empty() {
-                let mut v: Vec<_> = std::fs::read_dir("/etc/keyd/")
+                let dir = get_config_dir();
+                let mut v: Vec<_> = std::fs::read_dir(&dir)
                     .ok().into_iter().flatten().flatten()
                     .map(|e| e.path())
                     .filter(|p| p.extension().is_some_and(|e| e == "conf"))

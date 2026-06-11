@@ -47,12 +47,12 @@ The name **keydo** carries a triple meaning:
 
 ### Configuration
 
-`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `/etc/keyd/`.
+`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `~/.config/keydo/`, falling back to `/etc/keyd/` if the former does not exist.
 
 > [!TIP]
 > Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scd) for a full reference of the configuration syntax.
 
-#### Basic Example (`/etc/keyd/default.conf`)
+#### Basic Example (`~/.config/keydo/default.conf` or `/etc/keyd/default.conf`)
 
 ```ini
 [ids]
@@ -74,7 +74,7 @@ l = right
 `keydo` provides a versatile CLI for managing the daemon and interacting with your keyboard.
 
 ```bash
-# Start the daemon (reads /etc/keyd/*.conf)
+# Start the daemon (reads ~/.config/keydo/*.conf or /etc/keyd/*.conf)
 sudo keydo daemon
 
 # Run with a specific config file
@@ -84,7 +84,7 @@ sudo keydo daemon --config ~/.config/keydo/work.conf
 sudo keydo monitor
 
 # Validate your configuration files
-keydo check /etc/keyd/default.conf
+keydo check ~/.config/keydo/default.conf
 
 # Reload configurations without restarting the daemon
 keydo reload
