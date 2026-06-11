@@ -106,7 +106,7 @@ enum Commands {
 
     /// Register keydo as a persistent background service
     Install {
-        /// Init system to use: auto, systemd, or runit (Linux only; auto-detected if omitted)
+        /// Init system to use: auto, systemd, systemd-user, or runit (Linux only; auto-detected if omitted)
         #[cfg_attr(not(target_os = "linux"), arg(hide = true))]
         #[arg(long, value_enum, default_value = "auto")]
         init: install::InitSystem,
@@ -114,7 +114,7 @@ enum Commands {
 
     /// Remove the keydo background service
     Uninstall {
-        /// Init system to use: auto, systemd, or runit (Linux only; auto-detected if omitted)
+        /// Init system to use: auto, systemd, systemd-user, or runit (Linux only; auto-detected if omitted)
         #[cfg_attr(not(target_os = "linux"), arg(hide = true))]
         #[arg(long, value_enum, default_value = "auto")]
         init: install::InitSystem,
@@ -122,18 +122,6 @@ enum Commands {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-/// Returns the default configuration directory.
-/// Checks ~/.config/keydo/ first, then falls back to /etc/keyd/.
-fn get_config_dir() -> String {
-    if let Some(home) = std::env::var_os("HOME") {
-        let path = std::path::PathBuf::from(home).join(".config/keydo");
-        if path.is_dir() {
-            return path.to_string_lossy().into_owned();
-        }
-    }
-    "/etc/keyd/".to_string()
-}
 
 /// Read a text payload: from `args` (space-joined) or stdin if args is empty.
 fn read_payload(args: &[String]) -> Vec<u8> {
@@ -194,7 +182,7 @@ fn main() {
                     process::exit(1);
                 });
             } else {
-                let dir = get_config_dir();
+                let dir = crate::config::get_config_dir();
                 let n = daemon.load_configs_from_dir(&dir);
                 if n == 0 {
                     eprintln!("WARNING: no .conf files found in {dir}");
@@ -254,7 +242,7 @@ fn main() {
         // ── check ──────────────────────────────────────────────────────────
         Some(Commands::Check { files }) => {
             let paths: Vec<String> = if files.is_empty() {
-                let dir = get_config_dir();
+                let dir = crate::config::get_config_dir();
                 let mut v: Vec<_> = std::fs::read_dir(&dir)
                     .ok().into_iter().flatten().flatten()
                     .map(|e| e.path())

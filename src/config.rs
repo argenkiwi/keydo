@@ -188,3 +188,15 @@ impl Config {
         }
     }
 }
+
+/// Returns the default configuration directory.
+/// Checks ~/.config/keydo/ first, then falls back to /etc/keyd/.
+pub fn get_config_dir() -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = std::path::PathBuf::from(home).join(".config/keydo");
+        if path.is_dir() {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+    "/etc/keyd/".to_string()
+}

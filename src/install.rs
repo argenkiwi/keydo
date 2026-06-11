@@ -8,7 +8,30 @@ pub enum InitSystem {
     #[default]
     Auto,
     Systemd,
+    #[clap(name = "systemd-user")]
+    SystemdUser,
     Runit,
+}
+
+#[cfg(target_os = "linux")]
+fn is_root() -> bool {
+    unsafe { libc::getuid() == 0 }
+}
+
+#[cfg(target_os = "linux")]
+fn check_config_presence(system_wide: bool) {
+    let dir = if system_wide {
+        "/etc/keyd/".to_string()
+    } else {
+        crate::config::get_config_dir()
+    };
+    let n = std::fs::read_dir(&dir)
+        .ok().into_iter().flatten().flatten()
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "conf"))
+        .count();
+    if n == 0 {
+        println!("WARNING: No .conf files found in {dir}. The daemon will have no effect until a config is added.");
+    }
 }
 
 // ── macOS ──────────────────────────────────────────────────────────────────
@@ -129,14 +152,18 @@ pub fn install(init: InitSystem) -> Result<(), String> {
         other => other,
     };
     match resolved {
-        InitSystem::Systemd => install_systemd(&exe),
-        InitSystem::Runit   => install_runit(&exe),
-        InitSystem::Auto    => unreachable!(),
+        InitSystem::Systemd      => { check_config_presence(true); install_systemd(&exe) },
+        InitSystem::SystemdUser  => { check_config_presence(false); install_systemd_user(&exe) },
+        InitSystem::Runit        => { check_config_presence(true); install_runit(&exe) },
+        InitSystem::Auto         => unreachable!(),
     }
 }
 
 #[cfg(target_os = "linux")]
 fn install_systemd(exe: &Path) -> Result<(), String> {
+    if !is_root() {
+        return Err("System-wide installation requires root privileges (try running with sudo or use --init systemd-user).".to_string());
+    }
     let unit = format!(
         "[Unit]\nDescription=keydo keyboard remapping daemon\nAfter=local-fs.target\n\n\
          [Service]\nExecStart={} daemon\nRestart=on-failure\nRestartSec=5\n\n\
@@ -144,7 +171,7 @@ fn install_systemd(exe: &Path) -> Result<(), String> {
         exe.display()
     );
     std::fs::write("/etc/systemd/system/keydo.service", unit)
-        .map_err(|e| format!("failed to write unit file (try running as root): {e}"))?;
+        .map_err(|e| format!("failed to write unit file: {e}"))?;
     run_cmd("systemctl", &["daemon-reload"])?;
     run_cmd("systemctl", &["enable", "--now", "keydo"])?;
     println!("keydo installed and started (systemd).");
@@ -152,7 +179,35 @@ fn install_systemd(exe: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+fn install_systemd_user(exe: &Path) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let user_unit_dir = Path::new(&home).join(".config/systemd/user");
+    std::fs::create_dir_all(&user_unit_dir)
+        .map_err(|e| format!("failed to create user unit directory: {e}"))?;
+
+    let unit_path = user_unit_dir.join("keydo.service");
+    let unit = format!(
+        "[Unit]\nDescription=keydo keyboard remapping daemon (user)\n\n\
+         [Service]\nExecStart={} daemon\nRestart=on-failure\nRestartSec=5\n\n\
+         [Install]\nWantedBy=default.target\n",
+        exe.display()
+    );
+    std::fs::write(&unit_path, unit)
+        .map_err(|e| format!("failed to write user unit file: {e}"))?;
+
+    run_cmd("systemctl", &["--user", "daemon-reload"])?;
+    run_cmd("systemctl", &["--user", "enable", "--now", "keydo"])?;
+
+    println!("keydo installed and started (systemd user service).");
+    println!("Note: Ensure your user has access to /dev/input/* and /dev/uinput (e.g. by being in the 'input' group).");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn install_runit(exe: &Path) -> Result<(), String> {
+    if !is_root() {
+        return Err("Runit installation requires root privileges (try running with sudo).".to_string());
+    }
     use std::os::unix::fs::PermissionsExt;
 
     let sv_dir = Path::new("/etc/sv/keydo");
@@ -183,14 +238,18 @@ pub fn uninstall(init: InitSystem) -> Result<(), String> {
         other => other,
     };
     match resolved {
-        InitSystem::Systemd => uninstall_systemd(),
-        InitSystem::Runit   => uninstall_runit(),
-        InitSystem::Auto    => unreachable!(),
+        InitSystem::Systemd     => uninstall_systemd(),
+        InitSystem::SystemdUser => uninstall_systemd_user(),
+        InitSystem::Runit       => uninstall_runit(),
+        InitSystem::Auto        => unreachable!(),
     }
 }
 
 #[cfg(target_os = "linux")]
 fn uninstall_systemd() -> Result<(), String> {
+    if !is_root() {
+        return Err("System-wide uninstallation requires root privileges (try running with sudo).".to_string());
+    }
     // Ignore failure — service may already be stopped or disabled.
     let _ = run_cmd("systemctl", &["disable", "--now", "keydo"]);
     let service = Path::new("/etc/systemd/system/keydo.service");
@@ -204,7 +263,24 @@ fn uninstall_systemd() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+fn uninstall_systemd_user() -> Result<(), String> {
+    let _ = run_cmd("systemctl", &["--user", "disable", "--now", "keydo"]);
+    let home = std::env::var("HOME").map_err(|_| "HOME environment variable not set".to_string())?;
+    let service = Path::new(&home).join(".config/systemd/user/keydo.service");
+    if service.exists() {
+        std::fs::remove_file(service)
+            .map_err(|e| format!("failed to remove user unit file: {e}"))?;
+    }
+    run_cmd("systemctl", &["--user", "daemon-reload"])?;
+    println!("keydo uninstalled (systemd user service).");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn uninstall_runit() -> Result<(), String> {
+    if !is_root() {
+        return Err("Runit uninstallation requires root privileges (try running with sudo).".to_string());
+    }
     let link = Path::new("/var/service/keydo");
     if link.exists() {
         std::fs::remove_file(link)
