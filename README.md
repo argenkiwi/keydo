@@ -32,18 +32,34 @@ The name **keydo** carries a triple meaning:
 
 ### Installation
 
-1. **Build the project:**
+1. **Install the binary:**
    ```bash
-   cargo build --release
+   cargo install --path .
    ```
 
-2. **Install the binary:**
+2. **Grant Permissions (macOS):**
+   Go to **System Settings** → **Privacy & Security** → **Accessibility** and add the `keydo` binary (`~/.cargo/bin/keydo`).
+
+3. **Register as a background service:**
    ```bash
-   sudo cp target/release/keydo /usr/local/bin/keydo
+   keydo install
+   ```
+   This writes and loads the appropriate service descriptor for your platform:
+   - **macOS:** a `LaunchAgent` plist in `~/Library/LaunchAgents/`
+   - **Linux (systemd):** a unit file in `/etc/systemd/system/` (requires root)
+   - **Linux (runit):** a run script in `/etc/sv/keydo/` with a symlink in `/var/service/` (requires root)
+
+   On Linux the init system is auto-detected. To specify it explicitly:
+   ```bash
+   sudo keydo install --init systemd
+   sudo keydo install --init runit
    ```
 
-3. **Grant Permissions:**
-   Go to **System Settings** → **Privacy & Security** → **Accessibility** and add either your Terminal (for testing) or the `keydo` binary.
+   To remove the service:
+   ```bash
+   keydo uninstall          # macOS
+   sudo keydo uninstall     # Linux
+   ```
 
 ### Configuration
 
@@ -74,11 +90,11 @@ l = right
 `keydo` provides a versatile CLI for managing the daemon and interacting with your keyboard.
 
 ```bash
-# Start the daemon (reads ~/.config/keydo/*.conf or /etc/keyd/*.conf)
-sudo keydo daemon
+# Start the daemon manually (reads ~/.config/keydo/*.conf or /etc/keyd/*.conf)
+keydo daemon
 
 # Run with a specific config file
-sudo keydo daemon --config ~/.config/keydo/work.conf
+keydo daemon --config ~/.config/keydo/work.conf
 
 # Monitor key events in real-time
 sudo keydo monitor
