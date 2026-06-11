@@ -14,6 +14,7 @@ pub mod keyboard_types;
 pub mod keyboard_impl;
 pub mod daemon;
 pub mod ipc;
+pub mod install;
 #[cfg(target_os = "macos")]
 pub mod macos_input;
 #[cfg(test)]
@@ -102,6 +103,22 @@ enum Commands {
 
     /// Stream layer changes from the running daemon
     Listen,
+
+    /// Register keydo as a persistent background service
+    Install {
+        /// Init system to use: auto, systemd, or runit (Linux only; auto-detected if omitted)
+        #[cfg_attr(not(target_os = "linux"), arg(hide = true))]
+        #[arg(long, value_enum, default_value = "auto")]
+        init: install::InitSystem,
+    },
+
+    /// Remove the keydo background service
+    Uninstall {
+        /// Init system to use: auto, systemd, or runit (Linux only; auto-detected if omitted)
+        #[cfg_attr(not(target_os = "linux"), arg(hide = true))]
+        #[arg(long, value_enum, default_value = "auto")]
+        init: install::InitSystem,
+    },
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -296,6 +313,22 @@ fn main() {
         Some(Commands::Input { timeout, text }) => {
             let payload = read_payload(&text);
             ipc_exec(IpcMessageType::Input, &payload, timeout.unwrap_or(0));
+        }
+
+        // ── install ────────────────────────────────────────────────────────
+        Some(Commands::Install { init }) => {
+            install::install(init).unwrap_or_else(|e| {
+                eprintln!("ERROR: {e}");
+                process::exit(1);
+            });
+        }
+
+        // ── uninstall ──────────────────────────────────────────────────────
+        Some(Commands::Uninstall { init }) => {
+            install::uninstall(init).unwrap_or_else(|e| {
+                eprintln!("ERROR: {e}");
+                process::exit(1);
+            });
         }
 
         // ── listen ─────────────────────────────────────────────────────────
