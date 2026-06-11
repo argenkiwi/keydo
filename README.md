@@ -1,12 +1,13 @@
 # keydo
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.kernel.org/)
 [![macOS](https://img.shields.io/badge/platform-macOS-blue.svg)](https://www.apple.com/macos/)
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
 
-**keydo** is a powerful keyboard remapping daemon for macOS, faithfully ported from [keyd](https://github.com/rvaiya/keyd). It brings the flexibility of Linux-style keyboard customization to macOS, implementing layers, chords, overloads, macros, and a full IPC protocol using native macOS APIs.
+**keydo** is a powerful keyboard remapping daemon ported from [keyd](https://github.com/rvaiya/keyd), running on both Linux and macOS. It implements layers, chords, overloads, macros, and a full IPC protocol — and extends the original by adding native macOS support via `CGEventTap`, which is what currently sets it apart from keyd.
 
-Unlike many macOS remappers that rely on simple key swaps, `keydo` captures input at a low level using `CGEventTap`, allowing for complex stateful transformations like multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held).
+Unlike many macOS remappers that rely on simple key swaps, `keydo` captures input at a low level, allowing for complex stateful transformations like multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held).
 
 The name **keydo** carries a triple meaning:
 - **keyd oxidised:** A tribute to its roots in `keyd`, now reimagined in Rust.
@@ -24,8 +25,8 @@ The name **keydo** carries a triple meaning:
 
 ## Prerequisites
 
-- **OS:** macOS 13.0 or later.
-- **Permissions:** `keydo` requires **Accessibility** permissions to capture and inject keyboard events.
+- **OS:** Linux, or macOS 13.0 or later.
+- **Permissions (macOS):** `keydo` requires **Accessibility** permissions to capture and inject keyboard events via `CGEventTap`.
 - **Rust:** A modern Rust toolchain (Edition 2024).
 
 ## Getting Started
