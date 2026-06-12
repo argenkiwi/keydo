@@ -197,6 +197,10 @@ mod linux {
             };
 
             let fd = if is_btn {
+                // Give key events preceding a button press a chance to propagate
+                // from the keyboard uinput device before writing to the pointer
+                // device, to avoid event-order transposition between the two
+                // (faithful port of keyd's usleep(1000) in vkbd/uinput.c).
                 std::thread::sleep(std::time::Duration::from_millis(1));
                 self.pfd.as_raw_fd()
             } else {
