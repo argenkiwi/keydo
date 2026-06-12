@@ -135,22 +135,22 @@ const EVIOCGID: libc::c_ulong = 0x8008_4502;
 #[cfg(target_os = "linux")]
 const EVIOCGRAB: libc::c_ulong = 0x4004_4590;
 
-// evdev event type constants
-#[cfg(target_os = "linux")] const EV_SYN: u16 = 0x00;
-#[cfg(target_os = "linux")] const EV_KEY: u16 = 0x01;
-#[cfg(target_os = "linux")] const EV_REL: u16 = 0x02;
-#[cfg(target_os = "linux")] const EV_ABS: u16 = 0x03;
-#[cfg(target_os = "linux")] const EV_LED: u16 = 0x11;
+// evdev event type constants (shared with vkbd)
+#[cfg(target_os = "linux")] pub(crate) const EV_SYN: u16 = 0x00;
+#[cfg(target_os = "linux")] pub(crate) const EV_KEY: u16 = 0x01;
+#[cfg(target_os = "linux")] pub(crate) const EV_REL: u16 = 0x02;
+#[cfg(target_os = "linux")] pub(crate) const EV_ABS: u16 = 0x03;
+#[cfg(target_os = "linux")] pub(crate) const EV_LED: u16 = 0x11;
 
-// EV_REL codes
-#[cfg(target_os = "linux")] const REL_X: u16 = 0x00;
-#[cfg(target_os = "linux")] const REL_Y: u16 = 0x01;
-#[cfg(target_os = "linux")] const REL_WHEEL: u16 = 0x08;
-#[cfg(target_os = "linux")] const REL_HWHEEL: u16 = 0x06;
+// EV_REL codes (shared with vkbd)
+#[cfg(target_os = "linux")] pub(crate) const REL_X: u16 = 0x00;
+#[cfg(target_os = "linux")] pub(crate) const REL_Y: u16 = 0x01;
+#[cfg(target_os = "linux")] pub(crate) const REL_WHEEL: u16 = 0x08;
+#[cfg(target_os = "linux")] pub(crate) const REL_HWHEEL: u16 = 0x06;
 
-// EV_ABS codes
-#[cfg(target_os = "linux")] const ABS_X: u16 = 0x00;
-#[cfg(target_os = "linux")] const ABS_Y: u16 = 0x01;
+// EV_ABS codes (shared with vkbd)
+#[cfg(target_os = "linux")] pub(crate) const ABS_X: u16 = 0x00;
+#[cfg(target_os = "linux")] pub(crate) const ABS_Y: u16 = 0x01;
 
 // EV_KEY codes used in capability detection (from linux/input-event-codes.h)
 #[cfg(target_os = "linux")] const MEDIA_KEYS: &[u32] = &[

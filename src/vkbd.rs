@@ -4,7 +4,10 @@ mod linux {
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::io::Write;
     use std::sync::Mutex;
-    use crate::device::{KEYD_KEYBOARD_PRODUCT_ID, KEYD_POINTER_PRODUCT_ID, KEYD_VENDOR_ID};
+    use crate::device::{
+        ABS_X, ABS_Y, EV_ABS, EV_KEY, EV_LED, EV_REL, EV_SYN, KEYD_KEYBOARD_PRODUCT_ID,
+        KEYD_POINTER_PRODUCT_ID, KEYD_VENDOR_ID, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
+    };
     use crate::keys::*;
     use libc::*;
 
@@ -15,21 +18,9 @@ mod linux {
     const UI_SET_LEDBIT: u64 = 1074025833;
     const UI_DEV_CREATE: u64 = 21761;
 
-    const EV_SYN: u16 = 0x00;
-    const EV_KEY: u16 = 0x01;
-    const EV_REL: u16 = 0x02;
-    const EV_ABS: u16 = 0x03;
-    const EV_LED: u16 = 0x11;
     const EV_REP: u16 = 0x14;
 
-    const REL_X: u16 = 0x00;
-    const REL_Y: u16 = 0x01;
     const REL_Z: u16 = 0x02;
-    const REL_WHEEL: u16 = 0x08;
-    const REL_HWHEEL: u16 = 0x06;
-
-    const ABS_X: u16 = 0x00;
-    const ABS_Y: u16 = 0x01;
 
     const BUS_USB: u16 = 0x03;
 
