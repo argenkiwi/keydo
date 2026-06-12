@@ -17,6 +17,10 @@ pub mod ipc;
 pub mod install;
 #[cfg(target_os = "macos")]
 pub mod macos_input;
+// Translation tables compile (and are tested) on every platform; the hook FFI
+// inside is cfg(windows)-gated.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub mod windows_input;
 #[cfg(test)]
 pub mod tests;
 #[cfg(test)]
@@ -124,7 +128,9 @@ enum Commands {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Returns the default configuration directory.
-/// Checks ~/.config/keydo/ first, then falls back to /etc/keyd/.
+/// Unix: ~/.config/keydo/ first, then /etc/keyd/.
+/// Windows: %APPDATA%\keydo\ first, then C:\ProgramData\keyd\.
+#[cfg(unix)]
 fn get_config_dir() -> String {
     if let Some(home) = std::env::var_os("HOME") {
         let path = std::path::PathBuf::from(home).join(".config/keydo");
@@ -133,6 +139,17 @@ fn get_config_dir() -> String {
         }
     }
     "/etc/keyd/".to_string()
+}
+
+#[cfg(windows)]
+fn get_config_dir() -> String {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let path = std::path::PathBuf::from(appdata).join("keydo");
+        if path.is_dir() {
+            return path.to_string_lossy().into_owned();
+        }
+    }
+    r"C:\ProgramData\keyd".to_string()
 }
 
 /// Read a text payload: from `args` (space-joined) or stdin if args is empty.

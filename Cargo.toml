@@ -44,13 +44,26 @@ similar-names = "allow"
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.10"
-libc = "0.2.186"
 log = "0.4.32"
-nix = "0.31.3"
 thiserror = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify = "0.11.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+] }
 
 [profile.release]
 lto = "fat"

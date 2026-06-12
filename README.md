@@ -3,9 +3,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.kernel.org/)
 [![macOS](https://img.shields.io/badge/platform-macOS-blue.svg)](https://www.apple.com/macos/)
+[![Windows](https://img.shields.io/badge/platform-Windows-green.svg)](https://www.microsoft.com/windows/)
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
 
-**keydo** is a powerful keyboard remapping daemon ported from [keyd](https://github.com/rvaiya/keyd), running on both Linux and macOS. It implements layers, chords, overloads, macros, and a full IPC protocol — and extends the original by adding native macOS support via `CGEventTap`.
+**keydo** is a powerful keyboard remapping daemon ported from [keyd](https://github.com/rvaiya/keyd), running on Linux, macOS, and Windows. It implements layers, chords, overloads, macros, and a full IPC protocol — and extends the original by adding native macOS support via `CGEventTap` and native Windows support via a low-level keyboard hook.
 
 Unlike many remappers that rely on simple key swaps, `keydo` captures input at a low level, allowing for complex stateful transformations like multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held).
 
@@ -22,10 +23,11 @@ The name **keydo** carries a triple meaning:
 - **Macros:** Execute complex sequences of keys and text.
 - **IPC Protocol:** Interact with the running daemon to reload configs, inject input, or monitor state.
 - **Native macOS Backend:** Uses `CGEventTap` for capture and `CGEventPost` for injection (no kernel extensions required).
+- **Native Windows Backend:** Uses a `WH_KEYBOARD_LL` hook for capture and `SendInput` for injection (no drivers required).
 
 ## Prerequisites
 
-- **OS:** Linux, or macOS 13.0 or later.
+- **OS:** Linux, macOS 13.0 or later, or Windows 10/11.
 - **Permissions (macOS):** `keydo` requires **Accessibility** permissions to capture and inject keyboard events via `CGEventTap`.
 - **Rust:** A modern Rust toolchain (Edition 2024).
 
@@ -49,6 +51,7 @@ The name **keydo** carries a triple meaning:
    - **macOS:** a `LaunchAgent` plist in `~/Library/LaunchAgents/`
    - **Linux (systemd):** a unit file in `/etc/systemd/system/` (requires root)
    - **Linux (runit):** a run script in `/etc/sv/keydo/` with a symlink in `/var/service/` (requires root)
+   - **Windows:** an `HKCU` Run registry value that starts `keydo daemon` at logon (no admin rights; low-level hooks cannot run from a session-0 service)
 
    On Linux the init system is auto-detected. To specify it explicitly:
    ```bash
@@ -58,13 +61,13 @@ The name **keydo** carries a triple meaning:
 
    To remove the service:
    ```bash
-   keydo uninstall          # macOS
+   keydo uninstall          # macOS / Windows
    sudo keydo uninstall     # Linux
    ```
 
 ### Configuration
 
-`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `~/.config/keydo/`, falling back to `/etc/keyd/` if the former does not exist.
+`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `~/.config/keydo/`, falling back to `/etc/keyd/` if the former does not exist. On Windows the directories are `%APPDATA%\keydo\` and `C:\ProgramData\keyd\`.
 
 > [!TIP]
 > Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scdoc) for a full reference of the configuration syntax.
@@ -116,6 +119,20 @@ keydo list-keys
 - **Execute Macro:** `keydo do "C-c C-v"`
 - **Live Binding:** `keydo bind "main.j=down"`
 - **Listen for state:** `keydo listen` (streams layer changes)
+
+## Windows Notes
+
+The Windows backend mirrors the macOS design: a single system-wide low-level keyboard hook (`WH_KEYBOARD_LL`) captures and swallows hardware key events, the remapping engine processes them, and the result is re-injected with `SendInput` (tagged so the hook ignores keydo's own output). Keys are translated by **scancode**, so remapping is keyboard-layout independent, exactly as on Linux. IPC between the CLI and the daemon uses the named pipe `\\.\pipe\keydo`.
+
+Known limitations:
+
+- **Elevated windows:** input destined for elevated (admin) applications is not visible to a non-elevated hook. Run `keydo daemon` from an elevated terminal if you need remapping inside admin apps.
+- **Injected input is distinguishable:** some games and anti-cheat systems ignore or flag `SendInput`-injected events.
+- **Console window:** `keydo daemon` runs in a console window, including when auto-started at logon.
+- **Unicode macros:** the unicode composition sequences are macOS-specific and do not yet produce the right characters on Windows.
+- **Per-device `[ids]` matching is unavailable:** the low-level hook cannot distinguish keyboards, so all input appears as a single device (same as macOS).
+
+If remapping suddenly stops while typing under heavy system load, Windows may have silently removed the hook (it evicts hooks whose callbacks run too slowly); restart the daemon. The panic sequence (hold **backspace + enter + escape**) immediately terminates the daemon and restores normal input.
 
 ## Acknowledgments
 

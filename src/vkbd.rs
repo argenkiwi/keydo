@@ -377,10 +377,216 @@ mod macos_vkbd {
 #[cfg(target_os = "macos")]
 pub use macos_vkbd::Vkbd;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+mod windows_vkbd {
+    use std::sync::{Arc, Condvar, Mutex};
+
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+        KEYEVENTF_SCANCODE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+        MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
+        SendInput,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETKEYBOARDDELAY, SPI_GETKEYBOARDSPEED, SystemParametersInfoW,
+    };
+
+    use crate::keys::*;
+    use crate::windows_input::{KEYD_MARKER, is_modifier_keyd, keyd_to_scancode, keyd_to_vk};
+
+    /// Distance the OS expects for one wheel notch (WHEEL_DELTA).
+    const WHEEL_DELTA: i32 = 120;
+    const XBUTTON1: i32 = 1;
+    const XBUTTON2: i32 = 2;
+
+    struct RepeatState {
+        key:      u8,
+        armed:    bool,
+        revision: u32,
+    }
+
+    /// Virtual keyboard backed by `SendInput`. Injected keys do not auto-repeat
+    /// (typematic repeat is generated below the injection point), so a software
+    /// repeat thread re-fires the held key — same design as the macOS backend.
+    pub struct Vkbd {
+        shared: Arc<(Mutex<RepeatState>, Condvar)>,
+    }
+
+    fn send_inputs(inputs: &[INPUT]) {
+        // SAFETY: inputs is a valid, contiguous slice of fully-initialized
+        // INPUT structs; cbSize matches the struct the slice contains.
+        unsafe {
+            SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    fn keyboard_input(vk: u16, scan: u16, flags: u32) -> INPUT {
+        // SAFETY: INPUT is a C struct fully overwritten below; zeroed is a
+        // valid initial state for its integer/union fields.
+        let mut input: INPUT = unsafe { std::mem::zeroed() };
+        input.r#type = INPUT_KEYBOARD;
+        input.Anonymous.ki = KEYBDINPUT {
+            wVk: vk,
+            wScan: scan,
+            dwFlags: flags,
+            time: 0,
+            dwExtraInfo: KEYD_MARKER,
+        };
+        input
+    }
+
+    fn mouse_input(dx: i32, dy: i32, mouse_data: i32, flags: u32) -> INPUT {
+        // SAFETY: as above — fully overwritten C struct.
+        let mut input: INPUT = unsafe { std::mem::zeroed() };
+        input.r#type = INPUT_MOUSE;
+        input.Anonymous.mi = MOUSEINPUT {
+            dx,
+            dy,
+            // DWORD field carrying a signed value (wheel deltas); wrap-cast.
+            mouseData: mouse_data as u32,
+            dwFlags: flags,
+            time: 0,
+            dwExtraInfo: KEYD_MARKER,
+        };
+        input
+    }
+
+    /// Inject one key transition, choosing VK injection (media/quirky keys) or
+    /// scancode injection (everything else; goes through the active layout
+    /// exactly like a hardware key).
+    fn inject_key(code: u8, pressed: bool) {
+        let up = if pressed { 0 } else { KEYEVENTF_KEYUP };
+
+        if let Some(vk) = keyd_to_vk(code) {
+            send_inputs(&[keyboard_input(vk, 0, up)]);
+            return;
+        }
+        let Some((scan, extended)) = keyd_to_scancode(code) else { return };
+        let ext = if extended { KEYEVENTF_EXTENDEDKEY } else { 0 };
+        send_inputs(&[keyboard_input(0, scan, KEYEVENTF_SCANCODE | ext | up)]);
+    }
+
+    /// System repeat settings → (initial delay ms, repeat interval ms).
+    /// SPI_GETKEYBOARDDELAY: 0–3 ≈ 250–1000 ms; SPI_GETKEYBOARDSPEED:
+    /// 0–31 ≈ 2.5–30 repeats/sec (documented as approximate).
+    fn get_repeat_settings() -> (u64, u64) {
+        let mut delay: u32 = 1;
+        let mut speed: u32 = 31;
+        // SAFETY: pvParam points to a u32, the documented out-parameter type
+        // for both SPI_GETKEYBOARDDELAY and SPI_GETKEYBOARDSPEED.
+        unsafe {
+            SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, (&raw mut delay).cast(), 0);
+            SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, (&raw mut speed).cast(), 0);
+        }
+        let delay_ms = (u64::from(delay.min(3)) + 1) * 250;
+        let cps = 2.5 + f64::from(speed.min(31)) * 27.5 / 31.0;
+        let interval_ms = (1000.0 / cps) as u64;
+        (delay_ms, interval_ms)
+    }
+
+    impl Vkbd {
+        pub fn init(_name: &str) -> Result<Self, String> {
+            let shared = Arc::new((
+                Mutex::new(RepeatState { key: 0, armed: false, revision: 0 }),
+                Condvar::new(),
+            ));
+
+            let shared_clone = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let (delay_ms, interval_ms) = get_repeat_settings();
+                let (lock, cvar) = &*shared_clone;
+
+                loop {
+                    // Wait until a key is armed.
+                    let (rev, key) = {
+                        let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        while !st.armed {
+                            st = cvar.wait(st).unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                        (st.revision, st.key)
+                    };
+
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+                    // Fire repeats at the system interval until cancelled.
+                    loop {
+                        let st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if st.revision != rev {
+                            break;
+                        }
+                        drop(st);
+
+                        inject_key(key, true);
+                        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+                    }
+                }
+            });
+
+            Ok(Vkbd { shared })
+        }
+
+        pub fn send_key(&self, code: u8, state: u8) {
+            // Mouse buttons route to mouse injection.
+            let button = match code {
+                c if c == KEYD_LEFT_MOUSE => Some((MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, 0)),
+                c if c == KEYD_RIGHT_MOUSE => Some((MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, 0)),
+                c if c == KEYD_MIDDLE_MOUSE => Some((MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0)),
+                c if c == KEYD_MOUSE_1 || c == KEYD_MOUSE_BACK =>
+                    Some((MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1)),
+                c if c == KEYD_MOUSE_2 || c == KEYD_MOUSE_FORWARD =>
+                    Some((MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON2)),
+                _ => None,
+            };
+            if let Some((down, up, data)) = button {
+                let flags = if state != 0 { down } else { up };
+                send_inputs(&[mouse_input(0, 0, data, flags)]);
+                return;
+            }
+
+            inject_key(code, state != 0);
+
+            // Arm or cancel the software repeat timer for non-modifier keys.
+            if !is_modifier_keyd(code) {
+                let (lock, cvar) = &*self.shared;
+                let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                if state != 0 {
+                    st.key       = code;
+                    st.armed     = true;
+                    st.revision += 1;
+                    cvar.notify_one();
+                } else if st.key == code && st.armed {
+                    st.armed     = false;
+                    st.revision += 1;
+                }
+            }
+        }
+
+        pub fn mouse_move(&self, x: i32, y: i32) {
+            if x != 0 || y != 0 {
+                send_inputs(&[mouse_input(x, y, 0, MOUSEEVENTF_MOVE)]);
+            }
+        }
+
+        pub fn mouse_scroll(&self, x: i32, y: i32) {
+            // Positive y scrolls up (wheel away from user), matching REL_WHEEL.
+            if y != 0 {
+                send_inputs(&[mouse_input(0, 0, y * WHEEL_DELTA, MOUSEEVENTF_WHEEL)]);
+            }
+            if x != 0 {
+                send_inputs(&[mouse_input(0, 0, x * WHEEL_DELTA, MOUSEEVENTF_HWHEEL)]);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use windows_vkbd::Vkbd;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub struct Vkbd;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl Vkbd {
     pub fn init(_name: &str) -> Result<Self, String> {
         log::info!("vkbd: stub init (unsupported platform)");

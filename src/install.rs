@@ -232,14 +232,52 @@ fn run_cmd(program: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+// ── Windows ────────────────────────────────────────────────────────────────
+//
+// No Windows service: low-level keyboard hooks don't work from session-0
+// services, so keydo must run inside the interactive session. An HKCU Run
+// registry value starts it at logon (no admin rights needed).
+
+#[cfg(windows)]
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+
+#[cfg(windows)]
+pub fn install(_init: InitSystem) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("failed to resolve binary path: {e}"))?;
+    let value = format!("\"{}\" daemon", exe.display());
+
+    let status = std::process::Command::new("reg")
+        .args(["add", RUN_KEY, "/v", "keydo", "/t", "REG_SZ", "/d", &value, "/f"])
+        .status()
+        .map_err(|e| format!("failed to run reg.exe: {e}"))?;
+    if !status.success() {
+        return Err("reg add failed".to_string());
+    }
+
+    println!("keydo registered to start at the next logon (HKCU Run key).");
+    println!("It runs in a console window; start it now with: keydo daemon");
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn uninstall(_init: InitSystem) -> Result<(), String> {
+    // Ignore failure — the value may not exist.
+    let _ = std::process::Command::new("reg")
+        .args(["delete", RUN_KEY, "/v", "keydo", "/f"])
+        .status();
+    println!("keydo uninstalled.");
+    Ok(())
+}
+
 // ── Unsupported platforms ──────────────────────────────────────────────────
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn install(_init: InitSystem) -> Result<(), String> {
     Err("install is not supported on this platform".to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub fn uninstall(_init: InitSystem) -> Result<(), String> {
     Err("uninstall is not supported on this platform".to_string())
 }

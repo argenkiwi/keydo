@@ -1,12 +1,9 @@
 //! Main daemon loop — scans input devices, dispatches key events through keyboard state machines,
 //! and services IPC connections (bind, macro, reload, layer-listen).
 
-use std::os::unix::io::{AsRawFd, RawFd};
-use std::os::unix::net::UnixListener;
-
 use crate::config::*;
 use crate::config_impl::{config_add_entry, config_check_match, config_parse};
-use crate::ipc::{IpcMessage, IpcMessageType};
+use crate::ipc::{IpcMessage, IpcMessageType, IpcServer, IpcStream};
 use crate::keyboard_types::*;
 use crate::keys::{KEYCODE_TABLE, KEYD_BACKSPACE, KEYD_ENTER, KEYD_ESC, KEYD_LEFTSHIFT, KEYD_SPACE, KEYD_TAB};
 
@@ -142,7 +139,7 @@ fn input_text(vkbd: &Vkbd, text: &str, delay_us: u32) {
 struct OutputState {
     vkbd:      Vkbd,
     keystate:  [u8; 256],
-    listeners: Vec<RawFd>,
+    listeners: Vec<IpcStream>,
 }
 
 // ── Daemon ─────────────────────────────────────────────────────────────────
@@ -152,7 +149,7 @@ pub struct Daemon {
     pub keyboards:   Vec<Keyboard>,
     pub devices:     Vec<Device>,
     pub device_kbd:  Vec<Option<usize>>,
-    ipc_server: Option<(UnixListener, std::fs::File)>,
+    ipc_server: Option<IpcServer>,
     config_dir: String,
 }
 
@@ -160,7 +157,7 @@ impl Daemon {
     /// Create a new daemon, initialising the virtual keyboard and IPC server socket.
     pub fn new() -> Result<Self, String> {
         let vkbd = Vkbd::init("keyd virtual keyboard")?;
-        let ipc_server = crate::ipc::ipc_create_server().ok();
+        let ipc_server = IpcServer::create().ok();
         if ipc_server.is_none() {
             eprintln!("WARNING: IPC server unavailable (another daemon running, or permissions issue)");
         }
@@ -249,18 +246,18 @@ impl Daemon {
         }
     }
 
-    fn send_success(conn: &mut std::os::unix::net::UnixStream) {
+    fn send_success(conn: &mut IpcStream) {
         let resp = IpcMessage::new(IpcMessageType::Success, 0);
         let _ = resp.write_to(conn);
     }
 
-    fn send_fail(conn: &mut std::os::unix::net::UnixStream, msg: &str) {
+    fn send_fail(conn: &mut IpcStream, msg: &str) {
         let mut resp = IpcMessage::new(IpcMessageType::Fail, 0);
         resp.set_data(msg.as_bytes());
         let _ = resp.write_to(conn);
     }
 
-    fn handle_client(&mut self, mut conn: std::os::unix::net::UnixStream) {
+    fn handle_client(&mut self, mut conn: IpcStream) {
         let Ok(msg) = IpcMessage::read_from(&mut conn) else { return };
 
         match IpcMessageType::try_from(msg.msg_type) {
@@ -302,9 +299,8 @@ impl Daemon {
             }
 
             Ok(IpcMessageType::LayerListen) => {
-                use std::os::unix::io::IntoRawFd;
-                // Transfer ownership; drop will NOT close (fd is in listeners).
-                self.output.listeners.push(conn.into_raw_fd());
+                // Keep the connection open for streaming; dropped when a write fails.
+                self.output.listeners.push(conn);
                 // Don't send a response — the connection stays open for streaming.
             }
 
@@ -313,9 +309,6 @@ impl Daemon {
     }
 
     /// Enter the main event loop. Blocks until the process is killed or an unrecoverable error occurs.
-    ///
-    /// On Linux, sets real-time scheduling (`SCHED_FIFO`) and locks process memory
-    /// (`mlockall`) before entering the loop to reduce input latency.
     pub fn run(&mut self) -> Result<(), String> {
         self.devices = Device::scan();
         self.device_kbd = self.devices.iter_mut()
@@ -326,6 +319,18 @@ impl Daemon {
             eprintln!("WARNING: No input devices found at startup (waiting for hot-plug).");
         }
 
+        #[cfg(unix)]
+        { self.run_loop_unix() }
+        #[cfg(windows)]
+        { self.run_loop_windows() }
+    }
+
+    /// poll(2)-based event loop shared by Linux and macOS.
+    ///
+    /// On Linux, sets real-time scheduling (`SCHED_FIFO`) and locks process memory
+    /// (`mlockall`) before entering the loop to reduce input latency.
+    #[cfg(unix)]
+    fn run_loop_unix(&mut self) -> Result<(), String> {
         // Linux: real-time scheduling and memory locking for low input latency.
         #[cfg(target_os = "linux")]
         {
@@ -355,7 +360,7 @@ impl Daemon {
 
         loop {
             let dev_count = self.devices.len();
-            let ipc_fd = self.ipc_server.as_ref().map(|(l, _)| l.as_raw_fd());
+            let ipc_fd = self.ipc_server.as_ref().map(IpcServer::as_raw_fd);
 
             // ── Build pollfd array ────────────────────────────────────────
             let mut pfds: Vec<libc::pollfd> = self.devices.iter()
@@ -454,8 +459,7 @@ impl Daemon {
             // ── IPC connections ───────────────────────────────────────────
             if ipc_pfd_idx.filter(|&idx| pfds[idx].revents & libc::POLLIN != 0).is_some() {
                 let conn_opt = self.ipc_server.as_ref()
-                    .and_then(|(l, _)| l.accept().ok())
-                    .map(|(c, _)| c);
+                    .and_then(|s| s.accept().ok());
                 if let Some(conn) = conn_opt {
                     self.handle_client(conn);
                 }
@@ -511,6 +515,76 @@ impl Daemon {
             self.device_kbd.truncate(j);
         }
     }
+
+    /// Channel-based event loop for Windows: the keyboard hook thread feeds a
+    /// channel; engine timeouts bound the wait. The wait is additionally
+    /// capped at 20 ms so queued IPC clients are serviced promptly (key
+    /// events wake the loop immediately, so input latency is unaffected).
+    #[cfg(windows)]
+    fn run_loop_windows(&mut self) -> Result<(), String> {
+        use std::sync::mpsc::RecvTimeoutError;
+
+        // Take the receiver out of the hook device so blocking on it doesn't
+        // hold a borrow of self.devices across dispatch_kbd calls.
+        let rx = self.devices.first_mut()
+            .and_then(|d| d.rx.take())
+            .ok_or_else(|| "Windows keyboard hook unavailable".to_string())?;
+
+        let mut panic_state = PanicState::new();
+        let mut timeout_ms: i64 = -1;
+
+        loop {
+            let wait_ms = if timeout_ms < 0 { 20 } else { timeout_ms.clamp(1, 20) } as u64;
+            let start = current_time_ms();
+            let recv = rx.recv_timeout(std::time::Duration::from_millis(wait_ms));
+            let now = current_time_ms();
+            let elapsed = now - start;
+
+            // ── Keyboard timeout (same arithmetic as the unix loop) ───────
+            if timeout_ms >= 0 {
+                timeout_ms -= elapsed;
+                if timeout_ms <= 0 {
+                    let mut next: i64 = -1;
+                    let ev = KeyEvent { code: 0, pressed: 0, timestamp: now as i32 };
+                    for ki in 0..self.keyboards.len() {
+                        let t = self.dispatch_kbd(ki, &[ev]);
+                        if t > 0 { next = if next < 0 { t } else { next.min(t) }; }
+                    }
+                    timeout_ms = next;
+                }
+            }
+
+            // ── Key events (first blocking recv, then drain) ──────────────
+            match recv {
+                Ok((code, pressed)) => {
+                    let kbd_idx = self.device_kbd.first().copied().flatten();
+                    let mut pending = Some((code, pressed));
+                    while let Some((code, pressed)) = pending.take() {
+                        // Safety-exit if backspace + enter + escape all held.
+                        panic_state.check(code, pressed != 0);
+                        if let Some(ki) = kbd_idx {
+                            let ev = KeyEvent { code, pressed, timestamp: now as i32 };
+                            let next = self.dispatch_kbd(ki, &[ev]);
+                            if next > 0 {
+                                timeout_ms = if timeout_ms < 0 { next }
+                                             else { timeout_ms.min(next) };
+                            }
+                        }
+                        pending = rx.try_recv().ok();
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err("keyboard hook thread terminated".to_string());
+                }
+            }
+
+            // ── IPC connections queued by the pipe accept thread ──────────
+            while let Some(conn) = self.ipc_server.as_ref().and_then(IpcServer::try_accept) {
+                self.handle_client(conn);
+            }
+        }
+    }
 }
 
 // ── Output adapters ────────────────────────────────────────────────────────
@@ -519,7 +593,7 @@ impl Daemon {
 struct DaemonOutput<'a> {
     vkbd:       &'a Vkbd,
     keystate:   &'a mut [u8; 256],
-    listeners:  &'a mut Vec<RawFd>,
+    listeners:  &'a mut Vec<IpcStream>,
     /// Raw fds of grabbed physical devices for this keyboard (layer_indicator LED).
     device_fds: &'a [RawFd],
 }
@@ -552,14 +626,10 @@ impl<'a> Output for DaemonOutput<'a> {
             format!("{}{}\n", if active != 0 { '+' } else { '-' }, layer.name)
         };
         let msg_bytes = msg.as_bytes();
-        let len = msg_bytes.len() as isize;
-        self.listeners.retain(|&fd| {
-            // SAFETY: fd is a valid open socket fd added in LayerListen; buffer pointer and size are correct.
-            let n = unsafe {
-                libc::write(fd, msg_bytes.as_ptr() as *const libc::c_void, msg_bytes.len())
-            };
-            // SAFETY: fd was written to above; close is safe when write fails (pipe broken, client gone).
-            if n == len { true } else { unsafe { libc::close(fd); }; false }
+        // Drop (and thereby close) any listener whose connection has gone away.
+        self.listeners.retain_mut(|stream| {
+            use std::io::Write;
+            stream.write_all(msg_bytes).is_ok()
         });
     }
 }

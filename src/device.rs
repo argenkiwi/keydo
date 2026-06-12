@@ -1,4 +1,9 @@
-use std::os::unix::io::RawFd;
+#[cfg(unix)]
+pub use std::os::unix::io::RawFd;
+/// On Windows `Device.fd` is only a liveness sentinel (-1 = removed); events
+/// arrive through a channel rather than a pollable descriptor.
+#[cfg(windows)]
+pub type RawFd = i32;
 
 pub const CAP_MOUSE: u8 = 0x1;
 pub const CAP_MOUSE_ABS: u8 = 0x2;
@@ -44,6 +49,10 @@ pub struct Device {
     pub maxy: u32,
     pub pending_rel_x: i32,
     pub pending_rel_y: i32,
+    /// Channel delivering (keyd_code, pressed) pairs from the keyboard hook
+    /// thread (single hook device only).
+    #[cfg(windows)]
+    pub rx: Option<std::sync::mpsc::Receiver<(u8, u8)>>,
 }
 
 /// djb2-variant UID matching C's generate_uid() — platform-independent for testing.
@@ -525,9 +534,74 @@ impl Device {
     }
 }
 
+// ── Windows ────────────────────────────────────────────────────────────────
+
+#[cfg(windows)]
+impl Device {
+    /// Install the low-level keyboard hook and expose it as a single device,
+    /// mirroring the macOS CGEventTap design.
+    pub fn scan() -> Vec<Device> {
+        match crate::windows_input::hook_init() {
+            Ok(rx) => vec![Device {
+                fd: 0,
+                grabbed: false,
+                capabilities: CAP_KEYBOARD | CAP_KEY,
+                is_virtual: false,
+                id: "0000:0000".to_string(),
+                name: "LowLevelKeyboardHook".to_string(),
+                path: String::new(),
+                minx: 0, maxx: 0, miny: 0, maxy: 0,
+                pending_rel_x: 0, pending_rel_y: 0,
+                rx: Some(rx),
+            }],
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn init(_path: &str) -> Result<Self, String> {
+        Err("Direct device access not supported on Windows".to_string())
+    }
+
+    /// "Grabbing" on Windows means the hook swallows hardware events instead
+    /// of passing them through (the analog of Linux EVIOCGRAB — `keydo
+    /// monitor` and unmatched configs leave input untouched).
+    pub fn grab(&mut self) -> Result<(), String> {
+        crate::windows_input::set_swallow(true);
+        self.grabbed = true;
+        Ok(())
+    }
+
+    pub fn ungrab(&mut self) -> Result<(), String> {
+        crate::windows_input::set_swallow(false);
+        self.grabbed = false;
+        Ok(())
+    }
+
+    pub fn set_led(&self, _led: u8, _state: bool) {}
+
+    pub fn read_event(&mut self) -> Option<DeviceEvent> {
+        use std::sync::mpsc::TryRecvError;
+        match self.rx.as_ref()?.try_recv() {
+            Ok((code, pressed)) => Some(DeviceEvent {
+                event_type: DeviceEventType::Key, code, pressed, x: 0, y: 0,
+            }),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                self.fd = -1;
+                Some(DeviceEvent {
+                    event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0,
+                })
+            }
+        }
+    }
+}
+
 // ── Other platforms (stub) ─────────────────────────────────────────────────
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl Device {
     pub fn scan() -> Vec<Device> { Vec::new() }
     pub fn init(_path: &str) -> Result<Self, String> { Err("Unsupported platform".to_string()) }
