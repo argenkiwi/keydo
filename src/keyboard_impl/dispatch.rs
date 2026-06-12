@@ -10,17 +10,25 @@ impl Keyboard {
             }
         }
 
-        let mut active_layers: Vec<usize> = (0..self.config.layers.len())
-            .filter(|&i| self.layer_state[i].active != 0)
-            .collect();
-
-        active_layers.sort_by_key(|&i| std::cmp::Reverse(self.layer_state[i].activation_time));
-
-        for &i in &active_layers {
-            let d = &self.config.layers[i].keymap[code as usize];
-            if d.op != Op::KeySequence || if let DescriptorData::KeySequence(ref ks) = d.data { ks.code != 0 } else { false } {
-                return (*d, i as i32);
+        // Single-pass max-scan over active layers, mirroring keyd's
+        // lookup_descriptor: the most recently activated layer wins, with
+        // ties going to the highest layer index (>= comparison).
+        let mut best: Option<usize> = None;
+        let mut max_ts: i64 = 0;
+        for i in 0..self.config.layers.len() {
+            if self.layer_state[i].active == 0 {
+                continue;
             }
+            let d = &self.config.layers[i].keymap[code as usize];
+            let bound = d.op != Op::KeySequence
+                || matches!(d.data, DescriptorData::KeySequence(ref ks) if ks.code != 0);
+            if bound && self.layer_state[i].activation_time >= max_ts {
+                max_ts = self.layer_state[i].activation_time;
+                best = Some(i);
+            }
+        }
+        if let Some(i) = best {
+            return (self.config.layers[i].keymap[code as usize], i as i32);
         }
 
         let main_idx = 0;

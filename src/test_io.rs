@@ -610,4 +610,57 @@ mod tests {
         let codes: Vec<u8> = output.events.iter().filter(|e| e.pressed != 0).map(|e| e.code).collect();
         assert_eq!(codes, vec![KEYD_H]);
     }
+
+    // ── Layer resolution precedence ───────────────────────────────────────────
+
+    const TWO_LAYER_CONFIG: &str =
+        "[ids]\n*\n\n[main]\ncapslock = layer(nav1)\ntab = layer(nav2)\n\n[nav1]\nh = left\n\n[nav2]\nh = right\n";
+
+    #[test]
+    fn test_most_recent_layer_wins() {
+        // nav2 (higher index) activated first, nav1 activated later:
+        // the most recently activated layer wins regardless of index.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, TWO_LAYER_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_TAB,      pressed: 1, timestamp: 0 },  // nav2 on
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 10 }, // nav1 on (more recent)
+            KeyEvent { code: KEYD_H,        pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_H,        pressed: 0, timestamp: 20 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 30 },
+            KeyEvent { code: KEYD_TAB,      pressed: 0, timestamp: 30 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_LEFT), "nav1 (most recent) should win → left");
+        assert!(!codes.contains(&KEYD_RIGHT), "nav2 binding must not fire");
+    }
+
+    #[test]
+    fn test_layer_tie_breaks_to_later_layer() {
+        // Both layers activated at the same timestamp: the higher layer index
+        // wins, matching keyd's `activation_time >= maxts` tie-break.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, TWO_LAYER_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 }, // nav1 on
+            KeyEvent { code: KEYD_TAB,      pressed: 1, timestamp: 0 }, // nav2 on, same time
+            KeyEvent { code: KEYD_H,        pressed: 1, timestamp: 10 },
+            KeyEvent { code: KEYD_H,        pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_TAB,      pressed: 0, timestamp: 20 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 20 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_RIGHT), "tie should go to the higher-index layer (nav2) → right");
+        assert!(!codes.contains(&KEYD_LEFT), "nav1 binding must not fire on a tie");
+    }
 }
