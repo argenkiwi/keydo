@@ -312,6 +312,12 @@ unsafe extern "C" fn tap_callback(
 
         let (cgkey, pressed): (u16, u8) = match event_type {
             CG_EVENT_KEY_DOWN => {
+                // OS auto-repeat: suppress and ignore. Keyd's Vkbd drives its own
+                // repeat via post_key_repeat, so feeding OS repeats into the state
+                // machine causes pending_timeout/overload to resolve prematurely.
+                if CGEventGetIntegerValueField(event, FIELD_KBD_AUTOREPEAT) != 0 {
+                    return std::ptr::null_mut();
+                }
                 (CGEventGetIntegerValueField(event, FIELD_KBD_KEYCODE) as u16, 1)
             }
             CG_EVENT_KEY_UP => {
