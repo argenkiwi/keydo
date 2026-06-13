@@ -67,6 +67,10 @@ pub struct OverloadState {
     pub queue_sz: usize,
     pub action1: Descriptor,
     pub action2: Descriptor,
+    /// Non-zero enables release-gap (sm_td) mode: max ms between ↑H and ↑I to count as HOLD.
+    pub release_gap_threshold: u16,
+    /// Timestamp when H was released entering phase 2; 0 means not yet in phase 2.
+    pub phase2_start: i64,
 }
 
 pub struct MacroPlayState {

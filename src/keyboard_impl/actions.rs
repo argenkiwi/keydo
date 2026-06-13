@@ -218,6 +218,32 @@ impl Keyboard {
                         queue_sz: 0,
                         action1,
                         action2,
+                        release_gap_threshold: 0,
+                        phase2_start: 0,
+                    });
+                    self.schedule_timeout(expiration);
+                }
+            }
+
+            Op::OverloadReleaseGap => {
+                if let DescriptorData::OverloadRelease(ov) = d.data && pressed != 0 {
+                    let action1 = self.config.descriptors[ov.action_idx as usize];
+                    let action2 = Descriptor {
+                        op: Op::Layer,
+                        data: DescriptorData::Layer(DescLayer { idx: ov.layer_idx }),
+                    };
+                    let expiration = time + ov.tap_timeout as i64;
+                    self.pending_overload = Some(OverloadState {
+                        code,
+                        dl: layer as u8,
+                        expiration,
+                        resolve_on_interrupt: 1,
+                        queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
+                        queue_sz: 0,
+                        action1,
+                        action2,
+                        release_gap_threshold: ov.following_timeout,
+                        phase2_start: 0,
                     });
                     self.schedule_timeout(expiration);
                 }

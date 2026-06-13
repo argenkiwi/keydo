@@ -34,9 +34,38 @@ impl Keyboard {
             }
         }
 
+        // Phase 2 entry: overloadr only. H released while interrupt keys are still held →
+        // don't resolve yet; instead record the timestamp and watch for the interrupt release.
+        // queue_sz > 1 means the queue holds more than just the H-release itself.
+        if let Some(po) = self.pending_overload.as_ref() {
+            if po.release_gap_threshold > 0
+                && po.phase2_start == 0
+                && code == po.code
+                && pressed == 0
+                && po.queue_sz > 1
+            {
+                self.pending_overload.as_mut().unwrap().phase2_start = time;
+                return true;
+            }
+        }
+
         // Decide if we can resolve now.
         let resolve: Option<Descriptor> = if let Some(po) = self.pending_overload.as_ref() {
-            if time >= po.expiration {
+            if po.release_gap_threshold > 0 && po.phase2_start > 0 {
+                // Phase 2 (overloadr): H already released. Resolve when interrupt key releases
+                // or the tap-timeout timer fires. In both cases, compare the elapsed gap against
+                // the following_timeout threshold: small gap → HOLD, large gap → TAP.
+                let threshold = po.release_gap_threshold as i64;
+                if time >= po.expiration {
+                    let gap = time - po.phase2_start;
+                    if gap <= threshold { Some(po.action2) } else { Some(po.action1) }
+                } else if code != 0 && pressed == 0 && code != po.code {
+                    let gap = time - po.phase2_start;
+                    if gap <= threshold { Some(po.action2) } else { Some(po.action1) }
+                } else {
+                    None
+                }
+            } else if time >= po.expiration {
                 Some(po.action2)
             } else if code == po.code && pressed == 0 {
                 Some(po.action1)
