@@ -170,6 +170,18 @@ fn check_descriptor_index_bounds(config: &Config, out: &mut Vec<ValidationError>
                     }
                 }
             }
+            DescriptorData::OverloadRelease(ov) => {
+                if ov.layer_idx < 0 || ov.layer_idx as usize >= nl {
+                    out.push(ValidationError::error(format!(
+                        "{ctx}: layer index {} is out of range (0..{nl})", ov.layer_idx
+                    )));
+                }
+                if ov.action_idx < 0 || ov.action_idx as usize >= nd {
+                    out.push(ValidationError::error(format!(
+                        "{ctx}: descriptor index {} is out of range (0..{nd})", ov.action_idx
+                    )));
+                }
+            }
             DescriptorData::TimeoutOp(to) => {
                 for idx in [to.action1_idx, to.action2_idx] {
                     if idx < 0 || idx as usize >= nd {

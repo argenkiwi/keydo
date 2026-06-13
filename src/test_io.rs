@@ -663,4 +663,114 @@ mod tests {
         assert!(codes.contains(&KEYD_RIGHT), "tie should go to the higher-index layer (nav2) → right");
         assert!(!codes.contains(&KEYD_LEFT), "nav1 binding must not fire on a tie");
     }
+
+    // overloadr(nav, a, tap_timeout=200, following_timeout=50): nav layer maps c→d.
+    const OVERLOADR_CONFIG: &str =
+        "[ids]\n*\n\n[main]\nspace = overloadr(nav, a, 200, 50)\n\n[nav]\nc = d\n";
+
+    #[test]
+    fn test_overloadr_solo_quick_tap() {
+        // ↓space ↑space within tap_timeout → TAP → emits 'a'
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADR_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_A), "solo quick tap should emit the tap action (a)");
+        assert!(!codes.contains(&KEYD_D), "nav layer must not activate on a solo tap");
+    }
+
+    #[test]
+    fn test_overloadr_solo_long_hold_activates_layer() {
+        // ↓space [timer fires at 200ms] ↓c ↑c ↑space → HOLD → emits 'd' (c on nav layer)
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADR_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_C,     pressed: 1, timestamp: 250 }, // timer fires at 200 first
+            KeyEvent { code: KEYD_C,     pressed: 0, timestamp: 300 },
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 500 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_D), "timer-HOLD should activate nav so c → d");
+        assert!(!codes.contains(&KEYD_A), "tap action must not fire on a hold");
+    }
+
+    #[test]
+    fn test_overloadr_interrupt_released_before_space() {
+        // ↓space ↓c ↑c ↑space: c released while space still held → HOLD (resolve_on_interrupt)
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADR_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_C,     pressed: 1, timestamp: 50 },
+            KeyEvent { code: KEYD_C,     pressed: 0, timestamp: 100 },
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 150 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_D), "c released before space → HOLD → nav active → c produces d");
+        assert!(!codes.contains(&KEYD_A), "tap action must not fire");
+    }
+
+    #[test]
+    fn test_overloadr_small_release_gap_is_hold() {
+        // ↓space ↓c ↑space ↑c with gap(↑space→↑c) = 30ms < following_timeout(50ms) → HOLD
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADR_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_C,     pressed: 1, timestamp: 50 },
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 100 },  // ← phase 2 entered
+            KeyEvent { code: KEYD_C,     pressed: 0, timestamp: 130 },  // gap = 30ms < 50ms → HOLD
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_D), "small release gap → chord HOLD → nav active → c produces d");
+        assert!(!codes.contains(&KEYD_A), "tap action must not fire on a chord hold");
+    }
+
+    #[test]
+    fn test_overloadr_large_release_gap_is_tap() {
+        // ↓space ↓c ↑space [timer fires at 200ms with gap=100ms > following_timeout(50ms)] → TAP
+        // Timer fires at t=200 while in phase 2 (phase2_start=100), gap=100ms > 50ms → TAP
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADR_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_C,     pressed: 1, timestamp: 50 },
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 100 },  // ← phase 2 entered
+            // Timer fires at t=200: gap = 200-100 = 100ms > 50ms → TAP
+            KeyEvent { code: KEYD_C,     pressed: 0, timestamp: 260 },  // after timer resolution
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_A), "large release gap → sequential TAP → emits tap action (a)");
+        assert!(codes.contains(&KEYD_C), "after TAP resolution c is replayed on main layer");
+        assert!(!codes.contains(&KEYD_D), "nav layer must not activate on a tap");
+    }
 }
