@@ -663,4 +663,49 @@ mod tests {
         assert!(codes.contains(&KEYD_RIGHT), "tie should go to the higher-index layer (nav2) → right");
         assert!(!codes.contains(&KEYD_LEFT), "nav1 binding must not fire on a tie");
     }
+
+    const OVERLOADI_CONFIG: &str = "[ids]\n*\n\n[main]\nspace = overloadi(a, b, 200)\n";
+
+    #[test]
+    fn test_overloadi_passthrough_release_resets_idle_clock() {
+        // Holding a passthrough key, releasing it, then quickly pressing the
+        // overloadi key counts as active typing: the release (not just the
+        // press) resets the idle clock, matching keyd.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADI_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_C,     pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_C,     pressed: 0, timestamp: 1000 }, // long hold
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 1100 }, // 100ms after release
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 1150 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_A), "idle measured from the release (100ms < 200ms) → action1 (a)");
+        assert!(!codes.contains(&KEYD_B), "idle action must not fire right after a key release");
+    }
+
+    #[test]
+    fn test_overloadi_resolves_idle_action_after_timeout() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, OVERLOADI_CONFIG).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_C,     pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_C,     pressed: 0, timestamp: 1000 },
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 5000 }, // 4000ms idle
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 5050 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_B), "4000ms idle ≥ 200ms timeout → action2 (b)");
+        assert!(!codes.contains(&KEYD_A), "active-typing action must not fire after idle timeout");
+    }
 }

@@ -35,11 +35,11 @@ impl Keyboard {
                         self.last_repeatable_action = d;
                         self.send_key(output, code, 1);
                         self.clear_oneshot(output);
-                        self.last_simple_key_time = time;
                     } else {
                         self.send_key(output, code, 0);
                         self.update_mods(output, -1, 0);
                     }
+                    self.last_simple_key_time = time;
                 }
             }
 
