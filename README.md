@@ -29,7 +29,8 @@ The name **keydo** carries a triple meaning:
 
 - **OS:** Linux, macOS 13.0 or later, or Windows 10/11.
 - **Permissions (macOS):** `keydo` requires **Accessibility** permissions to capture and inject keyboard events via `CGEventTap`.
-- **Rust:** A modern Rust toolchain (Edition 2024).
+- **Permissions (Windows):** No special permissions are needed for most use cases. To remap input inside elevated (admin) windows, run the daemon from an elevated terminal.
+- **Rust:** A modern Rust toolchain (Edition 2024). On Windows, install via [rustup](https://rustup.rs/) and ensure the **MSVC** toolchain is active (the default on Windows). The **Visual Studio Build Tools 2019** or later with the "Desktop development with C++" workload is required as the linker backend.
 
 ## Getting Started
 
@@ -39,8 +40,9 @@ The name **keydo** carries a triple meaning:
    ```bash
    cargo install --path .
    ```
+   The binary is placed in `~/.cargo/bin/keydo` (Linux/macOS) or `%USERPROFILE%\.cargo\bin\keydo.exe` (Windows). Make sure this directory is on your `PATH`.
 
-2. **Grant Permissions (macOS):**
+2. **Grant Permissions (macOS only):**
    Go to **System Settings** → **Privacy & Security** → **Accessibility** and add the `keydo` binary (`~/.cargo/bin/keydo`).
 
 3. **Register as a background service:**
@@ -51,7 +53,7 @@ The name **keydo** carries a triple meaning:
    - **macOS:** a `LaunchAgent` plist in `~/Library/LaunchAgents/`
    - **Linux (systemd):** a unit file in `/etc/systemd/system/` (requires root)
    - **Linux (runit):** a run script in `/etc/sv/keydo/` with a symlink in `/var/service/` (requires root)
-   - **Windows:** an `HKCU` Run registry value that starts `keydo daemon` at logon (no admin rights; low-level hooks cannot run from a session-0 service)
+   - **Windows:** an `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value that starts `keydo daemon` at logon (no admin rights required; low-level hooks cannot run from a session-0 service)
 
    On Linux the init system is auto-detected. To specify it explicitly:
    ```bash
@@ -64,6 +66,28 @@ The name **keydo** carries a triple meaning:
    keydo uninstall          # macOS / Windows
    sudo keydo uninstall     # Linux
    ```
+
+### Windows Quick-Start
+
+1. Install [rustup](https://rustup.rs/) and, when prompted, choose the default **MSVC** toolchain.
+2. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select **Desktop development with C++**.
+3. Build and install keydo:
+   ```powershell
+   cargo install --path .
+   ```
+4. Place your config file at `%APPDATA%\keydo\default.conf` (create the directory if it does not exist).
+5. Register the auto-start entry:
+   ```powershell
+   keydo install
+   ```
+6. Start the daemon immediately (without rebooting):
+   ```powershell
+   keydo daemon
+   ```
+   A console window will appear while the daemon is running. Subsequent logins will start it automatically via the registry Run key.
+
+> [!NOTE]
+> To remap keys inside applications running as Administrator, launch the daemon from an elevated PowerShell prompt (`Run as Administrator`). The IPC pipe (`\\.\pipe\keydo`) is accessible from both elevated and non-elevated terminals.
 
 ### Configuration
 
