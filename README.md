@@ -96,7 +96,9 @@ The name **keydo** carries a triple meaning:
 > [!TIP]
 > Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scdoc) for a full reference of the configuration syntax.
 
-#### Basic Example (`~/.config/keydo/default.conf` or `/etc/keyd/default.conf`)
+#### Basic Example
+
+Place this file at `~/.config/keydo/default.conf` (Linux/macOS), `/etc/keyd/default.conf` (Linux system-wide), or `%APPDATA%\keydo\default.conf` (Windows):
 
 ```ini
 [ids]
@@ -117,6 +119,7 @@ l = right
 
 `keydo` provides a versatile CLI for managing the daemon and interacting with your keyboard.
 
+**Linux / macOS**
 ```bash
 # Start the daemon manually (reads ~/.config/keydo/*.conf or /etc/keyd/*.conf)
 keydo daemon
@@ -129,6 +132,27 @@ sudo keydo monitor
 
 # Validate your configuration files
 keydo check ~/.config/keydo/default.conf
+
+# Reload configurations without restarting the daemon
+keydo reload
+
+# List all valid key names for use in configs
+keydo list-keys
+```
+
+**Windows**
+```powershell
+# Start the daemon manually (reads %APPDATA%\keydo\*.conf or C:\ProgramData\keyd\*.conf)
+keydo daemon
+
+# Run with a specific config file
+keydo daemon --config "$env:APPDATA\keydo\work.conf"
+
+# Monitor key events in real-time (no elevation required)
+keydo monitor
+
+# Validate your configuration files
+keydo check "$env:APPDATA\keydo\default.conf"
 
 # Reload configurations without restarting the daemon
 keydo reload
