@@ -38,7 +38,6 @@ use std::process;
 
 #[derive(Parser)]
 #[command(
-    version = "2.6.0",
     about   = "A key remapping daemon.",
     long_about = None,
     // With no subcommand, run the daemon (matches C behaviour).
