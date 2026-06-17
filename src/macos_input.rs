@@ -2,6 +2,8 @@
 //! macOS keyboard capture (CGEventTap) and injection (CGEventPost).
 
 use std::os::unix::io::RawFd;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use libc::{c_void, c_long, c_char};
 
 // ── FFI types ────────────────────────────────────────────────────────────────
@@ -287,6 +289,9 @@ struct TapCtx {
     write_fd: RawFd,
     port:     CFMachPortRef,  // set before CFRunLoopRun, before callback can fire
     mod_down: [u8; 128],
+    /// When true the tap consumes events (daemon "grab"); when false it passes
+    /// them through unchanged (monitor — observe without altering the stream).
+    suppress: Arc<AtomicBool>,
 }
 
 unsafe extern "C" fn tap_callback(
@@ -310,13 +315,20 @@ unsafe extern "C" fn tap_callback(
             return event;
         }
 
+        // When not grabbing (monitor), the event must leave the callback
+        // untouched. `suppress` is read once and used as the return value below.
+        let suppress = ctx.suppress.load(Ordering::Relaxed);
+        let passthrough = if suppress { std::ptr::null_mut() } else { event };
+
         let (cgkey, pressed): (u16, u8) = match event_type {
             CG_EVENT_KEY_DOWN => {
-                // OS auto-repeat: suppress and ignore. Keyd's Vkbd drives its own
-                // repeat via post_key_repeat, so feeding OS repeats into the state
-                // machine causes pending_timeout/overload to resolve prematurely.
+                // OS auto-repeat: don't forward to the reader. Keyd's Vkbd drives
+                // its own repeat via post_key_repeat, so feeding OS repeats into the
+                // state machine causes pending_timeout/overload to resolve prematurely;
+                // and the monitor should not echo OS repeats. The event itself is
+                // still passed through untouched when not grabbing.
                 if CGEventGetIntegerValueField(event, FIELD_KBD_AUTOREPEAT) != 0 {
-                    return std::ptr::null_mut();
+                    return passthrough;
                 }
                 (CGEventGetIntegerValueField(event, FIELD_KBD_KEYCODE) as u16, 1)
             }
@@ -337,7 +349,7 @@ unsafe extern "C" fn tap_callback(
             log::error!("keyd: failed to write to pipe");
         }
 
-        std::ptr::null_mut()
+        passthrough
     }
 }
 
@@ -354,8 +366,11 @@ fn infer_mod_pressed(ctx: &mut TapCtx, cgkey: u16, flags: CGEventFlags) -> u8 {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Start the CGEventTap on a background thread. Returns the pipe read fd.
-pub fn tap_init() -> RawFd {
+/// Start the CGEventTap on a background thread. Returns the pipe read fd and a
+/// shared flag controlling whether the tap consumes events. The flag starts
+/// `false` (passive — events pass through, as the monitor needs); the daemon
+/// flips it on via `Device::grab`.
+pub fn tap_init() -> (RawFd, Arc<AtomicBool>) {
     let mut fds = [0i32; 2];
     // SAFETY: fds is a 2-element array; pipe() fills it with valid read/write file descriptors.
     assert!(unsafe { libc::pipe(fds.as_mut_ptr()) } == 0, "pipe() failed");
@@ -367,11 +382,14 @@ pub fn tap_init() -> RawFd {
         libc::fcntl(write_fd, libc::F_SETFL, libc::O_NONBLOCK);
     };
 
+    let suppress = Arc::new(AtomicBool::new(false));
+
     // Cast to usize so the closure is Send (usize is Send; *mut is not).
     let ctx_addr: usize = Box::into_raw(Box::new(TapCtx {
         write_fd,
         port:     std::ptr::null_mut(),
         mod_down: [0; 128],
+        suppress: Arc::clone(&suppress),
     })) as usize;
 
     let mask: CGEventMask = (1u64 << CG_EVENT_KEY_DOWN)
@@ -411,7 +429,7 @@ pub fn tap_init() -> RawFd {
         }
     });
 
-    read_fd
+    (read_fd, suppress)
 }
 
 #[derive(Debug, PartialEq)]

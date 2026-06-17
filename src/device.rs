@@ -53,6 +53,10 @@ pub struct Device {
     /// thread (single hook device only).
     #[cfg(windows)]
     pub rx: Option<std::sync::mpsc::Receiver<(u8, u8)>>,
+    /// Shared flag telling the CGEventTap whether to consume events. Set by
+    /// `grab`/`ungrab`; the monitor never grabs, so the tap stays passive.
+    #[cfg(target_os = "macos")]
+    pub suppress: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// djb2-variant UID matching C's generate_uid() — platform-independent for testing.
@@ -489,7 +493,7 @@ impl Device {
 #[cfg(target_os = "macos")]
 impl Device {
     pub fn scan() -> Vec<Device> {
-        let read_fd = crate::macos_input::tap_init();
+        let (read_fd, suppress) = crate::macos_input::tap_init();
         vec![Device {
             fd: read_fd,
             grabbed: false,
@@ -500,6 +504,7 @@ impl Device {
             path: String::new(),
             minx: 0, maxx: 0, miny: 0, maxy: 0,
             pending_rel_x: 0, pending_rel_y: 0,
+            suppress,
         }]
     }
 
@@ -508,11 +513,14 @@ impl Device {
     }
 
     pub fn grab(&mut self) -> Result<(), String> {
+        // Start consuming events at the tap; without this the tap only observes.
+        self.suppress.store(true, std::sync::atomic::Ordering::Relaxed);
         self.grabbed = true;
         Ok(())
     }
 
     pub fn ungrab(&mut self) -> Result<(), String> {
+        self.suppress.store(false, std::sync::atomic::Ordering::Relaxed);
         self.grabbed = false;
         Ok(())
     }
