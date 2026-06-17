@@ -36,89 +36,51 @@ The name **keydo** carries a triple meaning:
 
 ### Installation
 
-1. **Install the binary:**
+1. **Build and install the binary:**
    ```bash
    cargo install --path .
    ```
-   The binary is placed in `~/.cargo/bin/keydo` (Linux/macOS) or `%USERPROFILE%\.cargo\bin\keydo.exe` (Windows). Make sure this directory is on your `PATH`.
+   The binary is placed in `~/.cargo/bin/keydo` (Linux/macOS) or `%USERPROFILE%\.cargo\bin\keydo.exe` (Windows). Ensure this directory is on your `PATH`.
 
-2. **Grant Permissions (macOS only):**
-   Go to **System Settings** → **Privacy & Security** → **Accessibility** and add the `keydo` binary (`~/.cargo/bin/keydo`).
+2. **Platform-specific setup:**
 
-3. **Register as a background service:**
-   ```bash
-   keydo install
-   ```
-   This writes and loads the appropriate service descriptor for your platform:
-   - **macOS:** a `LaunchAgent` plist in `~/Library/LaunchAgents/`
-   - **Linux (systemd):** a user-level unit file in `~/.config/systemd/user/` (runs in your user session)
-   - **Linux (runit):** a run script in `/etc/sv/keydo/` with a symlink in `/var/service/` (requires root)
-   - **Windows:** an `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value that starts `keydo daemon` at logon
+#### Linux
+- **System Path:** To make `keydo` available for system-wide commands (which require `sudo`), copy it to `/usr/local/bin`:
+  ```bash
+  sudo cp ~/.cargo/bin/keydo /usr/local/bin/
+  ```
+- **Service:** Register the daemon as a system-wide service (supports systemd and runit):
+  ```bash
+  sudo keydo install
+  ```
+- **Permissions:** `keydo` runs as a dedicated system user. The installer adds your user to the `keydo` group, but you must **log out and back in** for this to take effect. If setting up manually, ensure your user can access the IPC socket and `/dev/uinput` has a udev rule (see [Linux Permissions](#linux-permissions) below).
 
-   On Linux, the init system is auto-detected. To specify it explicitly:
-   ```bash
-   keydo install --init systemd
-   sudo keydo install --init runit
-   ```
+#### macOS
+- **Service:** Register the daemon as a user-level service:
+  ```bash
+  keydo install
+  ```
+- **Permissions:** Go to **System Settings** → **Privacy & Security** → **Accessibility** and add the `keydo` binary (`~/.cargo/bin/keydo`).
 
-   To remove the service:
-   ```bash
-   keydo uninstall
-   ```
-
-### Linux Permissions (systemd)
-
-When running as a user service, `keydo` needs permission to read from `/dev/input/*` and write to `/dev/uinput`.
-
-1. **Add your user to the input and uinput groups:**
-   ```bash
-   sudo usermod -aG input,uinput $USER
-   ```
-
-2. **Ensure `/dev/uinput` has the correct group permissions:**
-   Create a file at `/etc/udev/rules.d/99-keydo.rules` with the following content:
-   ```text
-   KERNEL=="uinput", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
-   ```
-
-3. **Apply the changes:**
-   Reload udev rules and **log out and back in** for the group changes to take effect:
-   ```bash
-   sudo udevadm control --reload-rules && sudo udevadm trigger
-   ```
-
-### Windows Quick-Start
-
-1. Install [rustup](https://rustup.rs/) and, when prompted, choose the default **MSVC** toolchain.
-2. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select **Desktop development with C++**.
-3. Build and install keydo:
-   ```powershell
-   cargo install --path .
-   ```
-4. Place your config file at `%APPDATA%\keydo\default.conf` (create the directory if it does not exist).
-5. Register the auto-start entry:
-   ```powershell
-   keydo install
-   ```
-6. Start the daemon immediately (without rebooting):
-   ```powershell
-   keydo daemon
-   ```
-   A console window will appear while the daemon is running. Subsequent logins will start it automatically via the registry Run key.
-
-> [!NOTE]
-> To remap keys inside applications running as Administrator, launch the daemon from an elevated PowerShell prompt (`Run as Administrator`). The IPC pipe (`\\.\pipe\keydo`) is accessible from both elevated and non-elevated terminals.
+#### Windows
+- **Service:** Register the daemon to start at logon:
+  ```bash
+  keydo install
+  ```
+- **Elevation:** To remap input inside elevated (admin) windows, you must run the daemon from an elevated terminal. The IPC pipe is accessible from both elevated and non-elevated terminals.
 
 ### Configuration
 
-`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in `~/.config/keydo/`, falling back to `/etc/keyd/` if the former does not exist. On Windows the directories are `%APPDATA%\keydo\` and `C:\ProgramData\keyd\`.
+`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in the following locations:
+- **Linux/macOS:** `~/.config/keydo/` (user) or `/etc/keyd/` (system)
+- **Windows:** `%APPDATA%\keydo\` (user) or `C:\ProgramData\keyd\` (system)
 
 > [!TIP]
 > Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scdoc) for a full reference of the configuration syntax.
 
 #### Basic Example
 
-Place this file at `~/.config/keydo/default.conf` (Linux/macOS), `/etc/keyd/default.conf` (Linux system-wide), or `%APPDATA%\keydo\default.conf` (Windows):
+Place this file at `~/.config/keydo/default.conf` (Linux/macOS) or `%APPDATA%\keydo\default.conf` (Windows):
 
 ```ini
 [ids]
@@ -139,40 +101,18 @@ l = right
 
 `keydo` provides a versatile CLI for managing the daemon and interacting with your keyboard.
 
-**Linux / macOS**
 ```bash
-# Start the daemon manually (reads ~/.config/keydo/*.conf or /etc/keyd/*.conf)
+# Start the daemon manually
 keydo daemon
 
 # Run with a specific config file
-keydo daemon --config ~/.config/keydo/work.conf
+keydo daemon --config path/to/config.conf
 
-# Monitor key events in real-time (requires input group membership or sudo on Linux)
+# Monitor key events in real-time
 keydo monitor
 
 # Validate your configuration files
-keydo check ~/.config/keydo/default.conf
-
-# Reload configurations without restarting the daemon
-keydo reload
-
-# List all valid key names for use in configs
-keydo list-keys
-```
-
-**Windows**
-```powershell
-# Start the daemon manually (reads %APPDATA%\keydo\*.conf or C:\ProgramData\keyd\*.conf)
-keydo daemon
-
-# Run with a specific config file
-keydo daemon --config "$env:APPDATA\keydo\work.conf"
-
-# Monitor key events in real-time (no elevation required)
-keydo monitor
-
-# Validate your configuration files
-keydo check "$env:APPDATA\keydo\default.conf"
+keydo check path/to/config.conf
 
 # Reload configurations without restarting the daemon
 keydo reload
@@ -187,6 +127,31 @@ keydo list-keys
 - **Execute Macro:** `keydo do "C-c C-v"`
 - **Live Binding:** `keydo bind "main.j=down"`
 - **Listen for state:** `keydo listen` (streams layer changes)
+
+## Linux Permissions
+
+When running as a service on Linux, `keydo` runs as a dedicated system user (`keydo`) with permission to read from `/dev/input/*` and write to `/dev/uinput`.
+
+The installer (`sudo keydo install`) automatically:
+1. Creates a `keydo` system user and group.
+2. Adds the `keydo` user to the `input` and `uinput` groups.
+3. Adds your current user (via `SUDO_USER`) to the `keydo` group so you can use the CLI.
+
+If you are setting permissions manually:
+1. **Ensure `/dev/uinput` has the correct group permissions:**
+   Create `/etc/udev/rules.d/99-keydo.rules`:
+   ```udev
+   KERNEL=="uinput", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
+   ```
+2. **Ensure your user can access the IPC socket:**
+   ```bash
+   sudo usermod -aG keydo $USER
+   ```
+3. **Apply changes:**
+   ```bash
+   sudo udevadm control --reload-rules && sudo udevadm trigger
+   ```
+   **Log out and back in** for group changes to take effect.
 
 ## Windows Notes
 
