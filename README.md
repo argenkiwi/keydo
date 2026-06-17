@@ -51,20 +51,40 @@ The name **keydo** carries a triple meaning:
    ```
    This writes and loads the appropriate service descriptor for your platform:
    - **macOS:** a `LaunchAgent` plist in `~/Library/LaunchAgents/`
-   - **Linux (systemd):** a unit file in `/etc/systemd/system/` (requires root)
+   - **Linux (systemd):** a user-level unit file in `~/.config/systemd/user/` (runs in your user session)
    - **Linux (runit):** a run script in `/etc/sv/keydo/` with a symlink in `/var/service/` (requires root)
-   - **Windows:** an `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value that starts `keydo daemon` at logon (no admin rights required; low-level hooks cannot run from a session-0 service)
+   - **Windows:** an `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry value that starts `keydo daemon` at logon
 
-   On Linux the init system is auto-detected. To specify it explicitly:
+   On Linux, the init system is auto-detected. To specify it explicitly:
    ```bash
-   sudo keydo install --init systemd
+   keydo install --init systemd
    sudo keydo install --init runit
    ```
 
    To remove the service:
    ```bash
-   keydo uninstall          # macOS / Windows
-   sudo keydo uninstall     # Linux
+   keydo uninstall
+   ```
+
+### Linux Permissions (systemd)
+
+When running as a user service, `keydo` needs permission to read from `/dev/input/*` and write to `/dev/uinput`.
+
+1. **Add your user to the input and uinput groups:**
+   ```bash
+   sudo usermod -aG input,uinput $USER
+   ```
+
+2. **Ensure `/dev/uinput` has the correct group permissions:**
+   Create a file at `/etc/udev/rules.d/99-keydo.rules` with the following content:
+   ```text
+   KERNEL=="uinput", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
+   ```
+
+3. **Apply the changes:**
+   Reload udev rules and **log out and back in** for the group changes to take effect:
+   ```bash
+   sudo udevadm control --reload-rules && sudo udevadm trigger
    ```
 
 ### Windows Quick-Start
@@ -127,8 +147,8 @@ keydo daemon
 # Run with a specific config file
 keydo daemon --config ~/.config/keydo/work.conf
 
-# Monitor key events in real-time
-sudo keydo monitor
+# Monitor key events in real-time (requires input group membership or sudo on Linux)
+keydo monitor
 
 # Validate your configuration files
 keydo check ~/.config/keydo/default.conf

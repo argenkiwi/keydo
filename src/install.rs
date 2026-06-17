@@ -138,16 +138,33 @@ pub fn install(init: InitSystem) -> Result<(), String> {
 #[cfg(target_os = "linux")]
 fn install_systemd(exe: &Path) -> Result<(), String> {
     let unit = format!(
-        "[Unit]\nDescription=keydo keyboard remapping daemon\nAfter=local-fs.target\n\n\
-         [Service]\nExecStart={} daemon\nRestart=on-failure\nRestartSec=5\n\n\
-         [Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=keydo keyboard remapping daemon\n\n\
+         [Service]\nExecStart=\"{}\" daemon\nRestart=on-failure\nRestartSec=5\n\n\
+         [Install]\nWantedBy=default.target\n",
         exe.display()
     );
-    std::fs::write("/etc/systemd/system/keydo.service", unit)
-        .map_err(|e| format!("failed to write unit file (try running as root): {e}"))?;
-    run_cmd("systemctl", &["daemon-reload"])?;
-    run_cmd("systemctl", &["enable", "--now", "keydo"])?;
-    println!("keydo installed and started (systemd).");
+
+    let home = std::env::var("HOME")
+        .map_err(|_| "HOME environment variable not set".to_string())?;
+    let unit_path = std::path::PathBuf::from(home)
+        .join(".config/systemd/user/keydo.service");
+
+    if std::path::Path::new("/etc/systemd/system/keydo.service").exists() {
+        eprintln!("WARNING: A system-wide service file exists at /etc/systemd/system/keydo.service.");
+        eprintln!("This may conflict with the user service. Consider removing it with: sudo keydo uninstall --init systemd");
+    }
+
+    if let Some(parent) = unit_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create systemd user directory: {e}"))?;
+    }
+
+    std::fs::write(&unit_path, unit)
+        .map_err(|e| format!("failed to write unit file: {e}"))?;
+
+    run_cmd("systemctl", &["--user", "daemon-reload"])?;
+    run_cmd("systemctl", &["--user", "enable", "--now", "keydo"])?;
+    println!("keydo installed and started (systemd user service).");
     Ok(())
 }
 
@@ -159,7 +176,7 @@ fn install_runit(exe: &Path) -> Result<(), String> {
     std::fs::create_dir_all(sv_dir)
         .map_err(|e| format!("failed to create /etc/sv/keydo: {e}"))?;
 
-    let run_script = format!("#!/bin/sh\nexec {} daemon 2>&1\n", exe.display());
+    let run_script = format!("#!/bin/sh\nexec \"{}\" daemon 2>&1\n", exe.display());
     let run_path = sv_dir.join("run");
     std::fs::write(&run_path, run_script)
         .map_err(|e| format!("failed to write run script: {e}"))?;
@@ -192,13 +209,18 @@ pub fn uninstall(init: InitSystem) -> Result<(), String> {
 #[cfg(target_os = "linux")]
 fn uninstall_systemd() -> Result<(), String> {
     // Ignore failure — service may already be stopped or disabled.
-    let _ = run_cmd("systemctl", &["disable", "--now", "keydo"]);
-    let service = Path::new("/etc/systemd/system/keydo.service");
+    let _ = run_cmd("systemctl", &["--user", "disable", "--now", "keydo"]);
+
+    let home = std::env::var("HOME")
+        .map_err(|_| "HOME environment variable not set".to_string())?;
+    let service = std::path::PathBuf::from(home)
+        .join(".config/systemd/user/keydo.service");
+
     if service.exists() {
         std::fs::remove_file(service)
             .map_err(|e| format!("failed to remove unit file: {e}"))?;
     }
-    run_cmd("systemctl", &["daemon-reload"])?;
+    run_cmd("systemctl", &["--user", "daemon-reload"])?;
     println!("keydo uninstalled (systemd).");
     Ok(())
 }
