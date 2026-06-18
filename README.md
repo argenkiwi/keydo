@@ -1,95 +1,121 @@
+<div align="center">
+
 # keydo
 
+*A powerful, cross-platform keyboard remapping daemon ported from [keyd](https://github.com/rvaiya/keyd), written in Rust.*
+
+[![Release](https://github.com/argenkiwi/keydo/workflows/Release/badge.svg)](https://github.com/argenkiwi/keydo/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.kernel.org/)
-[![macOS](https://img.shields.io/badge/platform-macOS-blue.svg)](https://www.apple.com/macos/)
-[![Windows](https://img.shields.io/badge/platform-Windows-green.svg)](https://www.microsoft.com/windows/)
-[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)](#)
 
-**keydo** is a powerful keyboard remapping daemon ported from [keyd](https://github.com/rvaiya/keyd), running on Linux, macOS, and Windows. It implements layers, chords, overloads, macros, and a full IPC protocol — and extends the original by adding native macOS support via `CGEventTap` and native Windows support via a low-level keyboard hook.
+⭐ If you find this project useful, please star it on GitHub!
 
-Unlike many remappers that rely on simple key swaps, `keydo` captures input at a low level, allowing for complex stateful transformations like multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held).
+[Features](#features) • [Prerequisites](#prerequisites) • [Installation](#installation) • [Configuration](#configuration) • [Usage](#usage) • [Platform Specifics](#platform-specifics) • [Acknowledgments](#acknowledgments)
 
-The name **keydo** carries a triple meaning:
-- **keyd oxidised:** A tribute to its roots in `keyd`, now reimagined in Rust.
-- **key do:** A direct command, ordering your keys to perform exactly as you wish.
-- **The Way of the Key:** Inspired by the Japanese *dō* (道), signifying the path or discipline of mastering your input.
+</div>
 
-## Key Features
+---
 
-- **Layer Support:** Create custom keyboard layers triggered by any key.
-- **Overloads:** Assign different behaviors to a key when tapped vs. held.
-- **Chords:** Trigger actions by pressing multiple keys simultaneously.
-- **Macros:** Execute complex sequences of keys and text.
-- **IPC Protocol:** Interact with the running daemon to reload configs, inject input, or monitor state.
-- **Native macOS Backend:** Uses `CGEventTap` for capture and `CGEventPost` for injection (no kernel extensions required).
-- **Native Windows Backend:** Uses a `WH_KEYBOARD_LL` hook for capture and `SendInput` for injection (no drivers required).
+**keydo** captures keyboard input at a low level to perform complex stateful transformations, such as multi-purpose keys (e.g., Caps Lock as Escape when tapped, Control when held), custom layers, and shortcuts. 
+
+Unlike simple key-swappers, `keydo` runs as a system daemon and interfaces directly with input systems across Linux, macOS, and Windows.
+
+> [!NOTE]
+> **What does keydo mean?**
+> - **keyd oxidised:** A tribute to its roots in `keyd`, reimagined in Rust.
+> - **key do:** A direct command, ordering your keys to perform exactly as you wish.
+> - **The Way of the Key:** Inspired by the Japanese *dō* (道), signifying the path or discipline of mastering your input.
+
+---
+
+## Features
+
+- 🎯 **Layer Support** – Create custom keyboard layers triggered by any key.
+- ⚡ **Overloads** – Assign different behaviors to a key when tapped vs. held.
+- 🤝 **Chords** – Trigger actions by pressing multiple keys simultaneously.
+- 📜 **Macros** – Execute complex sequences of keys and text.
+- 🔌 **IPC Protocol** – Interact with the running daemon to reload configurations, inject input, or monitor state.
+- 💻 **Cross-Platform Backends**:
+  - **Linux**: Integrates natively with `uinput` and `/dev/input`.
+  - **macOS**: Uses `CGEventTap` for capture and `CGEventPost` for injection (no kernel extensions needed).
+  - **Windows**: Uses a `WH_KEYBOARD_LL` hook for capture and `SendInput` for injection (no drivers needed).
+
+---
 
 ## Prerequisites
 
-- **OS:** Linux, macOS 13.0 or later, or Windows 10/11.
-- **Permissions (macOS):** `keydo` requires **Accessibility** permissions to capture and inject keyboard events via `CGEventTap`.
-- **Permissions (Windows):** No special permissions are needed for most use cases. To remap input inside elevated (admin) windows, run the daemon from an elevated terminal.
-- **Rust:** A modern Rust toolchain (Edition 2024). On Windows, install via [rustup](https://rustup.rs/) and ensure the **MSVC** toolchain is active (the default on Windows). The **Visual Studio Build Tools 2019** or later with the "Desktop development with C++" workload is required as the linker backend.
+- **OS Support**: Linux, macOS 13.0 or later, or Windows 10/11.
+- **Rust Toolchain**: Rust 2024 Edition.
+  - **Windows**: Build requires the **MSVC** toolchain (default) and **Visual Studio Build Tools 2019** (or later) with the "Desktop development with C++" workload installed.
+- **Permissions**:
+  - **macOS**: Accessibility permissions are required to capture and inject keys.
+  - **Windows**: Requires an elevated terminal/daemon to remap input inside admin/elevated windows.
+  - **Linux**: Root access is required to access input devices and the system IPC socket.
 
-## Getting Started
+---
 
-### Installation
+## Installation
 
-1. **Build and install the binary:**
-   ```bash
-   cargo install --path .
-   ```
-   The binary is placed in `~/.cargo/bin/keydo` (Linux/macOS) or `%USERPROFILE%\.cargo\bin\keydo.exe` (Windows). Ensure this directory is on your `PATH`.
+### 1. Build the Binary
+Compile and install the binary using Cargo:
+```bash
+cargo install --path .
+```
+Ensure that `~/.cargo/bin` (Linux/macOS) or `%USERPROFILE%\.cargo\bin` (Windows) is added to your system `PATH`.
 
-2. **Platform-specific setup:**
+### 2. Register the Service
+Configure `keydo` to run automatically as a system or user service:
 
 #### Linux
-
-1. **Copy to system path** (required before running the installer):
+1. Copy the binary to your system path:
    ```bash
    sudo cp ~/.cargo/bin/keydo /usr/local/bin/
    ```
-2. **Register the service** (supports systemd and runit; auto-detects):
+2. Automatically register and start the daemon (supports `systemd` and `runit`):
    ```bash
    sudo /usr/local/bin/keydo install
    ```
-3. **Group membership:** The installer adds your user to the `keydo` group so the CLI works without root. **Log out and back in** for this to take effect. If setting up manually, ensure your user can access the IPC socket and `/dev/uinput` has a udev rule (see [Linux Permissions](#linux-permissions) below).
+3. Add your user to the `keydo` group to use the CLI without root (requires logging out and back in to apply):
+   ```bash
+   sudo usermod -aG keydo $USER
+   ```
 
 #### macOS
-- **Service:** Register the daemon as a user-level service:
-  ```bash
-  keydo install
-  ```
-- **Permissions:** Go to **System Settings** → **Privacy & Security** → **Accessibility** and add the `keydo` binary (`~/.cargo/bin/keydo`).
+Register the daemon as a user-level launchd service:
+```bash
+keydo install
+```
+> [!IMPORTANT]
+> You must grant `keydo` Accessibility permissions. Go to **System Settings** → **Privacy & Security** → **Accessibility** and add the `keydo` binary (`~/.cargo/bin/keydo`).
 
 #### Windows
-- **Service:** Register the daemon to start at logon:
-  ```bash
-  keydo install
-  ```
-- **Elevation:** To remap input inside elevated (admin) windows, you must run the daemon from an elevated terminal. The IPC pipe is accessible from both elevated and non-elevated terminals.
+Register the daemon to start automatically at logon:
+```cmd
+keydo install
+```
 
-### Configuration
+---
 
-`keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in the following locations:
-- **Linux:** `/etc/keyd/` (system-wide; user-local paths like `~/.config/keydo/` are not supported because the background service runs as a dedicated system user)
-- **macOS:** `~/.config/keydo/` (user)
-- **Windows:** `%APPDATA%\keydo\` (user) or `C:\ProgramData\keyd\` (system)
+## Configuration
+
+`keydo` uses the same configuration language as `keyd`. By default, it reads configuration files from:
+- **Linux**: `/etc/keyd/` (system-wide configuration files only)
+- **macOS**: `~/.config/keydo/` (user-local configurations)
+- **Windows**: `%APPDATA%\keydo\` (user-local) or `C:\ProgramData\keyd\` (system-wide)
 
 > [!TIP]
-> Check out the [keyd documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scdoc) for a full reference of the configuration syntax.
+> Refer to the official [keyd configuration documentation](https://github.com/rvaiya/keyd/blob/master/docs/keyd.scdoc) for a full reference of the syntax.
 
-#### Basic Example
-
-Place this file at `/etc/keyd/default.conf` (Linux), `~/.config/keydo/default.conf` (macOS), or `%APPDATA%\keydo\default.conf` (Windows):
+### Basic Example
+Create a configuration file (e.g., `default.conf`) in your platform's configuration directory:
 
 ```ini
 [ids]
 *
 
 [main]
-# Maps capslock to escape when tapped and the 'nav' layer when held.
+# Maps capslock to escape when tapped, and the 'nav' layer when held
 capslock = overload(nav, esc)
 
 [nav]
@@ -99,73 +125,86 @@ k = up
 l = right
 ```
 
+---
+
 ## Usage
 
-`keydo` provides a versatile CLI for managing the daemon and interacting with your keyboard.
+Start the daemon manually or use the CLI to interact with a running instance.
 
+### Daemon Commands
 ```bash
-# Start the daemon manually
+# Start the daemon in the foreground
 keydo daemon
 
-# Run with a specific config file
+# Run the daemon with a specific configuration file
 keydo daemon --config path/to/config.conf
 
-# Monitor key events in real-time
-keydo monitor
-
-# Validate your configuration files
+# Check configuration files for syntax errors
 keydo check path/to/config.conf
 
 # Reload configurations without restarting the daemon
 keydo reload
+```
 
-# List all valid key names for use in configs
+### Monitoring & Debugging
+```bash
+# Monitor key events in real-time
+keydo monitor
+
+# Stream live layer state changes
+keydo listen
+
+# List all valid key names for configuration files
 keydo list-keys
 ```
 
-### Advanced Commands
+### Input & Macro Injection
+```bash
+# Inject raw text
+keydo input "Hello, World!"
 
-- **Inject Text:** `keydo input "Hello, World!"`
-- **Execute Macro:** `keydo do "C-c C-v"`
-- **Live Binding:** `keydo bind "main.j=down"`
-- **Listen for state:** `keydo listen` (streams layer changes)
+# Execute a macro sequence (e.g., Control+C, then Control+V)
+keydo do "C-c C-v"
 
-## Linux Permissions
+# Bind a key temporarily
+keydo bind "main.j=down"
+```
 
-When running as a service on Linux, the `keydo` daemon runs as `root` so it can access input devices and process configuration files (including symlinks pointing to your home directory) natively. The IPC socket `/run/keydo/socket` is owned by the `keydo` system group with `0660` permissions so that users in that group can manage the daemon (e.g. reloading configs via the CLI) without requiring `sudo`.
+---
 
-The installer (`sudo keydo install`) automatically:
-1. Creates the `keydo` system group.
-2. Adds your current user (via `SUDO_USER`) to the `keydo` group so you can use the CLI without `sudo`.
+## Platform Specifics
 
-If you are setting permissions manually:
-1. **Ensure the socket directory exists with setgid group permissions:**
+### Linux Permissions
+When running as a service, the `keydo` daemon runs as `root` to interface with `/dev/input` and `/dev/uinput`. The IPC socket `/run/keydo/socket` is owned by the `keydo` system group with `0660` permissions.
+
+If setting permissions manually without the installer:
+1. Create the socket directory with setgid group permissions:
    ```bash
    sudo mkdir -p /run/keydo
    sudo groupadd -f keydo
    sudo chown root:keydo /run/keydo
    sudo chmod 2750 /run/keydo
    ```
-2. **Add your user to the keydo group:**
+2. Add your user to the group:
    ```bash
    sudo usermod -aG keydo $USER
    ```
-3. **Log out and back in** for group changes to take effect.
+3. Log out and log back in to apply the group changes.
 
-## Windows Notes
+### Windows Details
+On Windows, a system-wide low-level keyboard hook (`WH_KEYBOARD_LL`) captures events and `SendInput` injects them. Input is translated by scancode, making remappings layout-independent. IPC uses the named pipe `\\.\pipe\keydo`.
 
-The Windows backend mirrors the macOS design: a single system-wide low-level keyboard hook (`WH_KEYBOARD_LL`) captures and swallows hardware key events, the remapping engine processes them, and the result is re-injected with `SendInput` (tagged so the hook ignores keydo's own output). Keys are translated by **scancode**, so remapping is keyboard-layout independent, exactly as on Linux. IPC between the CLI and the daemon uses the named pipe `\\.\pipe\keydo`.
+> [!WARNING]
+> **Windows Limitations & Safety Hooks**
+> - **Elevated Windows**: Hook input is not captured inside admin/elevated programs unless the daemon itself runs in an elevated command prompt.
+> - **Anti-Cheat & Games**: Some games/anti-cheat systems block or flag `SendInput`-injected events.
+> - **Console Window**: The daemon currently runs in a visible console window when started.
+> - **Unicode Macros**: Unicode composition sequences are currently macOS-only.
+> - **No Device Matching**: All keyboards appear as a single device; per-device matching via `[ids]` is not supported.
+> - **Emergency Panic Sequence**: If input locks up or remapping stops under heavy load, press and hold **Backspace + Enter + Escape** to instantly terminate the daemon and restore default keyboard behavior.
 
-Known limitations:
-
-- **Elevated windows:** input destined for elevated (admin) applications is not visible to a non-elevated hook. Run `keydo daemon` from an elevated terminal if you need remapping inside admin apps.
-- **Injected input is distinguishable:** some games and anti-cheat systems ignore or flag `SendInput`-injected events.
-- **Console window:** `keydo daemon` runs in a console window, including when auto-started at logon.
-- **Unicode macros:** the unicode composition sequences are macOS-specific and do not yet produce the right characters on Windows.
-- **Per-device `[ids]` matching is unavailable:** the low-level hook cannot distinguish keyboards, so all input appears as a single device (same as macOS).
-
-If remapping suddenly stops while typing under heavy system load, Windows may have silently removed the hook (it evicts hooks whose callbacks run too slowly); restart the daemon. The panic sequence (hold **backspace + enter + escape**) immediately terminates the daemon and restores normal input.
+---
 
 ## Acknowledgments
 
-This project is a port of [keyd](https://github.com/rvaiya/keyd) by [Raheman Vaiya](https://github.com/rvaiya). We are grateful for his work on the original architecture and configuration language.
+This project is a port of [keyd](https://github.com/rvaiya/keyd) created by [Raheman Vaiya](https://github.com/rvaiya). We are incredibly grateful for his work on the design and configuration syntax.
