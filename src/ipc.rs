@@ -4,11 +4,34 @@ use std::io::{self, Read, Write};
 
 use crate::error::KeydoError;
 
-/// Path of the daemon's IPC endpoint: a Unix socket, or a named pipe on Windows.
-#[cfg(unix)]
-pub const SOCKET_PATH: &str = "/var/run/keyd.socket";
-#[cfg(windows)]
-pub const SOCKET_PATH: &str = r"\\.\pipe\keydo";
+/// Returns the path of the daemon's IPC endpoint: a Unix socket on Linux/macOS,
+/// or a named pipe on Windows.
+pub fn get_socket_path() -> String {
+    #[cfg(unix)]
+    {
+        if std::path::Path::new("/run/keydo").is_dir() {
+            "/run/keydo/socket".to_string()
+        } else if std::path::Path::new("/run/keydo/socket").exists() {
+            "/run/keydo/socket".to_string()
+        } else {
+            // SAFETY: getuid() is a standard system call that always succeeds.
+            let uid = unsafe { libc::getuid() };
+            if uid == 0 {
+                "/run/keydo/socket".to_string()
+            } else {
+                if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                    format!("{}/keydo.socket", runtime_dir)
+                } else {
+                    format!("/tmp/keydo-{}.socket", uid)
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        r"\\.\pipe\keydo".to_string()
+    }
+}
 
 /// Platform stream for one IPC connection. On Windows the named-pipe handle is
 /// wrapped in `File`, which provides the same blocking Read/Write semantics.
@@ -130,7 +153,8 @@ impl IpcServer {
         use std::os::unix::fs::PermissionsExt;
         use std::os::unix::io::AsRawFd;
 
-        let lock_path = format!("{SOCKET_PATH}.lock");
+        let socket_path = get_socket_path();
+        let lock_path = format!("{socket_path}.lock");
         let lock_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -145,11 +169,11 @@ impl IpcServer {
             return Err(io::Error::last_os_error());
         }
 
-        let _ = fs::remove_file(SOCKET_PATH);
-        let listener = std::os::unix::net::UnixListener::bind(SOCKET_PATH)?;
-        let mut perms = fs::metadata(SOCKET_PATH)?.permissions();
+        let _ = fs::remove_file(&socket_path);
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
+        let mut perms = fs::metadata(&socket_path)?.permissions();
         perms.set_mode(0o660);
-        fs::set_permissions(SOCKET_PATH, perms)?;
+        fs::set_permissions(&socket_path, perms)?;
 
         Ok(Self { listener, _lock: lock_file })
     }
@@ -169,7 +193,7 @@ impl IpcServer {
 /// Connect to the running daemon's IPC endpoint.
 #[cfg(unix)]
 pub fn ipc_connect() -> io::Result<IpcStream> {
-    std::os::unix::net::UnixStream::connect(SOCKET_PATH)
+    std::os::unix::net::UnixStream::connect(get_socket_path())
 }
 
 // ── Windows: named-pipe server ─────────────────────────────────────────────
@@ -238,7 +262,7 @@ mod windows_pipe {
         PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     };
 
-    use super::SOCKET_PATH;
+    use super::get_socket_path;
 
     /// Raw pipe-instance handle awaiting a client. Wrapped in a newtype so it
     /// can be sent to the accept thread.
@@ -249,7 +273,7 @@ mod windows_pipe {
     unsafe impl Send for PipeInstance {}
 
     pub fn create_instance(first: bool) -> io::Result<PipeInstance> {
-        let mut path: Vec<u16> = SOCKET_PATH.encode_utf16().collect();
+        let mut path: Vec<u16> = get_socket_path().encode_utf16().collect();
         path.push(0);
 
         let mut open_mode = PIPE_ACCESS_DUPLEX;
@@ -309,7 +333,8 @@ mod windows_pipe {
 #[cfg(windows)]
 pub fn ipc_connect() -> io::Result<IpcStream> {
     const ERROR_PIPE_BUSY: i32 = 231;
-    let open = || std::fs::OpenOptions::new().read(true).write(true).open(SOCKET_PATH);
+    let socket_path = get_socket_path();
+    let open = || std::fs::OpenOptions::new().read(true).write(true).open(&socket_path);
     // All instances busy: the server is creating the next one; retry briefly.
     for _ in 0..50 {
         match open() {

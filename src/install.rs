@@ -122,12 +122,19 @@ fn detect_init() -> Result<InitSystem, String> {
 
 #[cfg(target_os = "linux")]
 pub fn install(init: InitSystem) -> Result<(), String> {
+    if unsafe { libc::getuid() } != 0 {
+        return Err("installation on Linux requires root (try running with sudo)".to_string());
+    }
+
     let exe = std::env::current_exe()
         .map_err(|e| format!("failed to resolve binary path: {e}"))?;
     let resolved = match init {
         InitSystem::Auto => detect_init()?,
         other => other,
     };
+
+    ensure_keydo_user()?;
+
     match resolved {
         InitSystem::Systemd => install_systemd(&exe),
         InitSystem::Runit   => install_runit(&exe),
@@ -136,18 +143,49 @@ pub fn install(init: InitSystem) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+fn ensure_keydo_user() -> Result<(), String> {
+    // 1. Create keydo group if it doesn't exist
+    let _ = run_cmd("groupadd", &["-f", "keydo"]);
+
+    // 2. Try to add the user who invoked sudo to the keydo group so they can use the CLI.
+    if let Ok(sudo_user) = std::env::var("SUDO_USER") {
+        let _ = run_cmd("usermod", &["-aG", "keydo", &sudo_user]);
+        println!("Added user '{sudo_user}' to the 'keydo' group. You may need to log out and back in for this to take effect.");
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn install_systemd(exe: &Path) -> Result<(), String> {
     let unit = format!(
-        "[Unit]\nDescription=keydo keyboard remapping daemon\nAfter=local-fs.target\n\n\
-         [Service]\nExecStart={} daemon\nRestart=on-failure\nRestartSec=5\n\n\
-         [Install]\nWantedBy=multi-user.target\n",
+        "[Unit]\nDescription=keydo keyboard remapping daemon\n\n\
+         [Service]\n\
+         ExecStart=\"{}\" daemon\n\
+         Restart=on-failure\n\
+         RestartSec=5\n\
+         User=root\n\
+         Group=keydo\n\
+         RuntimeDirectory=keydo\n\
+         RuntimeDirectoryMode=0750\n\n\
+         [Install]\n\
+         WantedBy=multi-user.target\n",
         exe.display()
     );
-    std::fs::write("/etc/systemd/system/keydo.service", unit)
-        .map_err(|e| format!("failed to write unit file (try running as root): {e}"))?;
+
+    let unit_path = std::path::PathBuf::from("/etc/systemd/system/keydo.service");
+
+    if let Some(parent) = unit_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create systemd directory: {e}"))?;
+    }
+
+    std::fs::write(&unit_path, unit)
+        .map_err(|e| format!("failed to write unit file: {e}"))?;
+
     run_cmd("systemctl", &["daemon-reload"])?;
     run_cmd("systemctl", &["enable", "--now", "keydo"])?;
-    println!("keydo installed and started (systemd).");
+    println!("keydo installed and started (systemd system service).");
     Ok(())
 }
 
@@ -159,7 +197,22 @@ fn install_runit(exe: &Path) -> Result<(), String> {
     std::fs::create_dir_all(sv_dir)
         .map_err(|e| format!("failed to create /etc/sv/keydo: {e}"))?;
 
-    let run_script = format!("#!/bin/sh\nexec {} daemon 2>&1\n", exe.display());
+    let run_script = format!(
+        "#!/bin/sh\n\
+         exec 2>&1\n\n\
+         mkdir -p /run/keydo\n\
+         chown root:keydo /run/keydo\n\
+         chmod 2750 /run/keydo\n\n\
+         # Sometimes when starting the keyd service, the keyboard can become unresponsive.\n\
+         # This is the result of keyd starting when the early udevd process is still running but\n\
+         # before the udevd runit service has started. The udevd runit service kills the early udevd\n\
+         # process causing the keyboard to become unresponsive until the keyd process has been\n\
+         # terminated. The below code verifies that the supervised udevd process is the same as\n\
+         # the currently running udevd process.\n\
+         [ \"$(cat /var/service/udevd/supervise/pid)\" = \"$(pgrep -x udevd)\" ] || exit 1\n\n\
+         exec \"{}\" daemon\n",
+        exe.display()
+    );
     let run_path = sv_dir.join("run");
     std::fs::write(&run_path, run_script)
         .map_err(|e| format!("failed to write run script: {e}"))?;
@@ -178,6 +231,9 @@ fn install_runit(exe: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 pub fn uninstall(init: InitSystem) -> Result<(), String> {
+    if unsafe { libc::getuid() } != 0 {
+        return Err("uninstallation on Linux requires root (try running with sudo)".to_string());
+    }
     let resolved = match init {
         InitSystem::Auto => detect_init()?,
         other => other,
@@ -193,7 +249,9 @@ pub fn uninstall(init: InitSystem) -> Result<(), String> {
 fn uninstall_systemd() -> Result<(), String> {
     // Ignore failure — service may already be stopped or disabled.
     let _ = run_cmd("systemctl", &["disable", "--now", "keydo"]);
-    let service = Path::new("/etc/systemd/system/keydo.service");
+
+    let service = std::path::PathBuf::from("/etc/systemd/system/keydo.service");
+
     if service.exists() {
         std::fs::remove_file(service)
             .map_err(|e| format!("failed to remove unit file: {e}"))?;
