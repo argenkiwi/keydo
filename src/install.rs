@@ -202,7 +202,7 @@ fn install_runit(exe: &Path) -> Result<(), String> {
     std::fs::create_dir_all(sv_dir)
         .map_err(|e| format!("failed to create /etc/sv/keydo: {e}"))?;
 
-    let run_script = format!("#!/bin/sh\nexec chpst -u keydo:input:uinput \"{}\" daemon 2>&1\n", exe.display());
+    let run_script = format!("#!/bin/sh\nexec chpst -u keydo:keydo \"{}\" daemon 2>&1\n", exe.display());
     let run_path = sv_dir.join("run");
     std::fs::write(&run_path, run_script)
         .map_err(|e| format!("failed to write run script: {e}"))?;

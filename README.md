@@ -45,15 +45,16 @@ The name **keydo** carries a triple meaning:
 2. **Platform-specific setup:**
 
 #### Linux
-- **System Path:** To make `keydo` available for system-wide commands (which require `sudo`), copy it to `/usr/local/bin`:
-  ```bash
-  sudo cp ~/.cargo/bin/keydo /usr/local/bin/
-  ```
-- **Service:** Register the daemon as a system-wide service (supports systemd and runit):
-  ```bash
-  sudo keydo install
-  ```
-- **Permissions:** `keydo` runs as a dedicated system user. The installer adds your user to the `keydo` group, but you must **log out and back in** for this to take effect. If setting up manually, ensure your user can access the IPC socket and `/dev/uinput` has a udev rule (see [Linux Permissions](#linux-permissions) below).
+
+1. **Copy to system path** (required before running the installer):
+   ```bash
+   sudo cp ~/.cargo/bin/keydo /usr/local/bin/
+   ```
+2. **Register the service** (supports systemd and runit; auto-detects):
+   ```bash
+   sudo /usr/local/bin/keydo install
+   ```
+3. **Group membership:** The installer adds your user to the `keydo` group so the CLI works without root. **Log out and back in** for this to take effect. If setting up manually, ensure your user can access the IPC socket and `/dev/uinput` has a udev rule (see [Linux Permissions](#linux-permissions) below).
 
 #### macOS
 - **Service:** Register the daemon as a user-level service:
