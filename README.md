@@ -73,7 +73,8 @@ The name **keydo** carries a triple meaning:
 ### Configuration
 
 `keydo` uses the same configuration language as `keyd`. By default, it looks for `.conf` files in the following locations:
-- **Linux/macOS:** `~/.config/keydo/` (user) or `/etc/keyd/` (system)
+- **Linux:** `/etc/keyd/` (system-wide; user-local paths like `~/.config/keydo/` are not supported because the background service runs as a dedicated system user)
+- **macOS:** `~/.config/keydo/` (user)
 - **Windows:** `%APPDATA%\keydo\` (user) or `C:\ProgramData\keyd\` (system)
 
 > [!TIP]
@@ -81,7 +82,7 @@ The name **keydo** carries a triple meaning:
 
 #### Basic Example
 
-Place this file at `~/.config/keydo/default.conf` (Linux/macOS) or `%APPDATA%\keydo\default.conf` (Windows):
+Place this file at `/etc/keyd/default.conf` (Linux), `~/.config/keydo/default.conf` (macOS), or `%APPDATA%\keydo\default.conf` (Windows):
 
 ```ini
 [ids]

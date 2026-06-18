@@ -52,7 +52,7 @@ struct Cli {
 enum Commands {
     /// Start the keyd daemon (default when no subcommand is given)
     Daemon {
-        /// Load a single config file instead of scanning default directories (~/.config/keydo/ or /etc/keyd/)
+        /// Load a single config file instead of scanning default directories (/etc/keyd/ on Linux, ~/.config/keydo/ on macOS, %APPDATA%\keydo\ on Windows)
         #[arg(short, long)]
         config: Option<String>,
     },
@@ -127,16 +127,17 @@ enum Commands {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Returns the default configuration directory.
-/// Unix: ~/.config/keydo/ first, then /etc/keyd/.
+/// macOS: ~/.config/keydo/.
+/// Linux: /etc/keyd/.
 /// Windows: %APPDATA%\keydo\ first, then C:\ProgramData\keyd\.
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn get_config_dir() -> String {
-    if let Some(home) = std::env::var_os("HOME") {
-        let path = std::path::PathBuf::from(home).join(".config/keydo");
-        if path.is_dir() {
-            return path.to_string_lossy().into_owned();
-        }
-    }
+    let home = std::env::var_os("HOME").unwrap_or_else(|| std::ffi::OsString::from("/"));
+    std::path::PathBuf::from(home).join(".config/keydo").to_string_lossy().into_owned()
+}
+
+#[cfg(target_os = "linux")]
+fn get_config_dir() -> String {
     "/etc/keyd/".to_string()
 }
 

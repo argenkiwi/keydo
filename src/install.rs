@@ -202,7 +202,23 @@ fn install_runit(exe: &Path) -> Result<(), String> {
     std::fs::create_dir_all(sv_dir)
         .map_err(|e| format!("failed to create /etc/sv/keydo: {e}"))?;
 
-    let run_script = format!("#!/bin/sh\nexec chpst -u keydo:keydo \"{}\" daemon 2>&1\n", exe.display());
+    let run_script = format!(
+        "#!/bin/sh\n\
+         exec 2>&1\n\n\
+         # Create runtime directory for socket\n\
+         mkdir -p /run/keydo\n\
+         chown keydo:keydo /run/keydo\n\
+         chmod 0750 /run/keydo\n\n\
+         # Sometimes when starting the keyd service, the keyboard can become unresponsive.\n\
+         # This is the result of keyd starting when the early udevd process is still running but\n\
+         # before the udevd runit service has started. The udevd runit service kills the early udevd\n\
+         # process causing the keyboard to become unresponsive until the keyd process has been\n\
+         # terminated. The below code verifies that the supervised udevd process is the same as\n\
+         # the currently running udevd process.\n\
+         [ \"$(cat /var/service/udevd/supervise/pid)\" = \"$(pgrep -x udevd)\" ] || exit 1\n\n\
+         exec chpst -u keydo:keydo:input:uinput \"{}\" daemon\n",
+        exe.display()
+    );
     let run_path = sv_dir.join("run");
     std::fs::write(&run_path, run_script)
         .map_err(|e| format!("failed to write run script: {e}"))?;
