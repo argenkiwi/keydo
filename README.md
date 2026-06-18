@@ -132,28 +132,25 @@ keydo list-keys
 
 ## Linux Permissions
 
-When running as a service on Linux, `keydo` runs as a dedicated system user (`keydo`) with permission to read from `/dev/input/*` and write to `/dev/uinput`.
+When running as a service on Linux, the `keydo` daemon runs as `root` so it can access input devices and process configuration files (including symlinks pointing to your home directory) natively. The IPC socket `/run/keydo/socket` is owned by the `keydo` system group with `0660` permissions so that users in that group can manage the daemon (e.g. reloading configs via the CLI) without requiring `sudo`.
 
 The installer (`sudo keydo install`) automatically:
-1. Creates a `keydo` system user and group.
-2. Adds the `keydo` user to the `input` and `uinput` groups.
-3. Adds your current user (via `SUDO_USER`) to the `keydo` group so you can use the CLI.
+1. Creates the `keydo` system group.
+2. Adds your current user (via `SUDO_USER`) to the `keydo` group so you can use the CLI without `sudo`.
 
 If you are setting permissions manually:
-1. **Ensure `/dev/uinput` has the correct group permissions:**
-   Create `/etc/udev/rules.d/99-keydo.rules`:
-   ```udev
-   KERNEL=="uinput", GROUP="uinput", MODE="0660", OPTIONS+="static_node=uinput"
+1. **Ensure the socket directory exists with setgid group permissions:**
+   ```bash
+   sudo mkdir -p /run/keydo
+   sudo groupadd -f keydo
+   sudo chown root:keydo /run/keydo
+   sudo chmod 2750 /run/keydo
    ```
-2. **Ensure your user can access the IPC socket:**
+2. **Add your user to the keydo group:**
    ```bash
    sudo usermod -aG keydo $USER
    ```
-3. **Apply changes:**
-   ```bash
-   sudo udevadm control --reload-rules && sudo udevadm trigger
-   ```
-   **Log out and back in** for group changes to take effect.
+3. **Log out and back in** for group changes to take effect.
 
 ## Windows Notes
 

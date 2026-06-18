@@ -147,11 +147,7 @@ fn ensure_keydo_user() -> Result<(), String> {
     // 1. Create keydo group if it doesn't exist
     let _ = run_cmd("groupadd", &["-f", "keydo"]);
 
-    // 2. Create keydo system user if it doesn't exist, and add to input/uinput groups.
-    // We ignore errors from useradd if the user already exists.
-    let _ = run_cmd("useradd", &["-r", "-s", "/usr/bin/nologin", "-g", "keydo", "-G", "input,uinput", "keydo"]);
-
-    // 3. Try to add the user who invoked sudo to the keydo group so they can use the CLI.
+    // 2. Try to add the user who invoked sudo to the keydo group so they can use the CLI.
     if let Ok(sudo_user) = std::env::var("SUDO_USER") {
         let _ = run_cmd("usermod", &["-aG", "keydo", &sudo_user]);
         println!("Added user '{sudo_user}' to the 'keydo' group. You may need to log out and back in for this to take effect.");
@@ -168,9 +164,8 @@ fn install_systemd(exe: &Path) -> Result<(), String> {
          ExecStart=\"{}\" daemon\n\
          Restart=on-failure\n\
          RestartSec=5\n\
-         User=keydo\n\
+         User=root\n\
          Group=keydo\n\
-         SupplementaryGroups=input uinput\n\
          RuntimeDirectory=keydo\n\
          RuntimeDirectoryMode=0750\n\n\
          [Install]\n\
@@ -205,10 +200,9 @@ fn install_runit(exe: &Path) -> Result<(), String> {
     let run_script = format!(
         "#!/bin/sh\n\
          exec 2>&1\n\n\
-         # Create runtime directory for socket\n\
          mkdir -p /run/keydo\n\
-         chown keydo:keydo /run/keydo\n\
-         chmod 0750 /run/keydo\n\n\
+         chown root:keydo /run/keydo\n\
+         chmod 2750 /run/keydo\n\n\
          # Sometimes when starting the keyd service, the keyboard can become unresponsive.\n\
          # This is the result of keyd starting when the early udevd process is still running but\n\
          # before the udevd runit service has started. The udevd runit service kills the early udevd\n\
@@ -216,7 +210,7 @@ fn install_runit(exe: &Path) -> Result<(), String> {
          # terminated. The below code verifies that the supervised udevd process is the same as\n\
          # the currently running udevd process.\n\
          [ \"$(cat /var/service/udevd/supervise/pid)\" = \"$(pgrep -x udevd)\" ] || exit 1\n\n\
-         exec chpst -u keydo:keydo:input:uinput \"{}\" daemon\n",
+         exec \"{}\" daemon\n",
         exe.display()
     );
     let run_path = sv_dir.join("run");
