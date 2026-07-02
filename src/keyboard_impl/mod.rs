@@ -36,6 +36,9 @@ impl Keyboard {
             oneshot_timeout: 0,
             overload_start_time: 0,
             last_simple_key_time: 0,
+            simple_key_history: [0; MAX_STREAK_HISTORY],
+            simple_key_history_head: 0,
+            simple_key_history_count: 0,
             timeouts: [0; 128],
             nr_timeouts: 0,
             active_chords: {
@@ -69,5 +72,14 @@ impl Keyboard {
             keystate: [0; 256],
             scroll: ScrollState { x: 0, y: 0, sensitivity: 0, active: 0 },
         }
+    }
+
+    /// Record the time of a "simple" keystroke (no modifiers, or shift only) — feeds both
+    /// `overloadi`'s single idle clock and `overloadi2`'s streak history.
+    pub(super) fn record_simple_key_time(&mut self, time: i64) {
+        self.last_simple_key_time = time;
+        self.simple_key_history[self.simple_key_history_head] = time;
+        self.simple_key_history_head = (self.simple_key_history_head + 1) % MAX_STREAK_HISTORY;
+        self.simple_key_history_count = (self.simple_key_history_count + 1).min(MAX_STREAK_HISTORY);
     }
 }

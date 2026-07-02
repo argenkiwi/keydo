@@ -101,6 +101,38 @@ fn descriptor_accepts_deprecated_overload2_syntax() {
     assert!(res.is_ok(), "deprecated overload2 should still parse successfully");
 }
 
+#[test]
+fn descriptor_overloadi2_returns_op() {
+    let mut cfg = make_base_config();
+    let mut ctx = ParseCtx::new();
+    let d = config_parse_descriptor("overloadi2(a, b, 300, 3)", &mut cfg, &mut ctx).unwrap();
+    assert_eq!(d.op, Op::OverloadIdleStreak);
+}
+
+#[test]
+fn descriptor_overloadi2_references_correct_fields() {
+    let mut cfg = make_base_config();
+    let mut ctx = ParseCtx::new();
+    let d = config_parse_descriptor("overloadi2(a, b, 300, 3)", &mut cfg, &mut ctx).unwrap();
+    if let DescriptorData::OverloadIdleStreak(ov) = d.data {
+        assert_eq!(ov.timeout, 300);
+        assert_eq!(ov.streak, 3);
+    } else {
+        panic!("expected OverloadIdleStreak data");
+    }
+}
+
+#[test]
+fn descriptor_overloadi2_rejects_streak_out_of_range() {
+    let mut cfg = make_base_config();
+    let mut ctx = ParseCtx::new();
+    assert!(config_parse_descriptor("overloadi2(a, b, 300, 0)", &mut cfg, &mut ctx).is_err());
+
+    let mut cfg = make_base_config();
+    let mut ctx = ParseCtx::new();
+    assert!(config_parse_descriptor("overloadi2(a, b, 300, 17)", &mut cfg, &mut ctx).is_err());
+}
+
 // ── config_parse_macro_expression ─────────────────────────────────────────────
 
 #[test]

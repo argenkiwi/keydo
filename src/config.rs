@@ -2,6 +2,7 @@ use crate::macro_types::Macro;
 
 pub const MAX_LAYER_NAME_LEN: usize = 64;
 pub const MAX_LAYERS: usize = 32;
+pub const MAX_STREAK_HISTORY: usize = 16;
 
 pub const ID_EXCLUDED: u8 = 1;
 pub const ID_MOUSE: u8 = 2;
@@ -27,6 +28,7 @@ pub enum Op {
     OverloadTimeout,
     OverloadTimeoutTap,
     OverloadIdleTimeout,
+    OverloadIdleStreak,
     Toggle,
     ToggleM,
     Repeat,
@@ -61,6 +63,8 @@ pub struct DescOverloadTo { pub layer_idx: i16, pub action_idx: i16, pub timeout
 #[derive(Debug, Clone, Copy)]
 pub struct DescOverloadIdle { pub action1_idx: i16, pub action2_idx: i16, pub timeout: u16 }
 #[derive(Debug, Clone, Copy)]
+pub struct DescOverloadIdleStreak { pub action1_idx: i16, pub action2_idx: i16, pub timeout: u16, pub streak: u16 }
+#[derive(Debug, Clone, Copy)]
 pub struct DescTimeout { pub action1_idx: i16, pub timeout: u16, pub action2_idx: i16 }
 #[derive(Debug, Clone, Copy)]
 pub struct DescMacro2 { pub delay: u16, pub interval: u16, pub macro_idx: i16 }
@@ -77,6 +81,7 @@ pub enum DescriptorData {
     Overload(DescOverload),
     OverloadTo(DescOverloadTo),
     OverloadIdle(DescOverloadIdle),
+    OverloadIdleStreak(DescOverloadIdleStreak),
     TimeoutOp(DescTimeout),
     Macro2(DescMacro2),
     None,

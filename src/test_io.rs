@@ -545,6 +545,142 @@ mod tests {
     }
 
     #[test]
+    fn test_overloadi2_streak_broken_resolves_action2() {
+        // space = overloadi2(a, b, 200, 3): the 3rd-most-recent keystroke (300ms ago)
+        // is outside the 200ms idleness window, so the streak is broken → 'b'.
+        // Three distinct keys are used because repeated presses of the *same* code
+        // without an intervening release are treated as key-repeat and suppressed
+        // (see dispatch.rs's cache_get guard), which would otherwise not produce
+        // three separate history entries.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nspace = overloadi2(a, b, 200, 3)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_Q,     pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_W,     pressed: 1, timestamp: 100 },
+            KeyEvent { code: KEYD_E,     pressed: 1, timestamp: 200 },
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 300 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let sent: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(sent.contains(&KEYD_B), "streak broken (300ms > 200ms idleness) should produce 'b'");
+        assert!(!sent.contains(&KEYD_A), "'a' must not fire when the streak is broken");
+    }
+
+    #[test]
+    fn test_overloadi2_streak_within_window_resolves_action1() {
+        // Same key timings as above, but with a 300ms idleness period: the oldest of
+        // the 3 keystrokes is exactly 300ms old, which counts as within the window
+        // (inclusive boundary) → streak holds → 'a'.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nspace = overloadi2(a, b, 300, 3)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_Q,     pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_W,     pressed: 1, timestamp: 100 },
+            KeyEvent { code: KEYD_E,     pressed: 1, timestamp: 200 },
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 300 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let sent: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(sent.contains(&KEYD_A), "streak within window (300ms == 300ms idleness) should produce 'a'");
+        assert!(!sent.contains(&KEYD_B), "'b' must not fire when the streak holds");
+    }
+
+    #[test]
+    fn test_overloadi2_insufficient_history_resolves_action2() {
+        // Only 2 prior keystrokes recorded, but streak requires 3 → not enough
+        // history to form a streak → always resolves to 'b', regardless of timing.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nspace = overloadi2(a, b, 300, 3)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_Q,     pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_W,     pressed: 1, timestamp: 100 },
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 200 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let sent: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(sent.contains(&KEYD_B), "insufficient history should produce 'b'");
+        assert!(!sent.contains(&KEYD_A), "'a' must not fire without enough history to form a streak");
+    }
+
+    #[test]
+    fn test_overloadi2_streak_one_matches_overloadi() {
+        // overloadi2(a, b, T, 1) should make the same active/idle choice as
+        // overloadi(a, b, T) for both a "recently active" and an "idle" scenario.
+        for (last_key_time, trigger_time, expect_active) in [(0, 50, true), (0, 500, false)] {
+            let mut cfg_i = Config::new();
+            config_parse_string(&mut cfg_i,
+                "[ids]\n*\n\n[main]\nspace = overloadi(a, b, 200)\n"
+            ).unwrap();
+            let mut kbd_i = Keyboard::new(cfg_i);
+            let mut output_i = TestOutput::new();
+            kbd_i.kbd_process_events(&mut output_i, &[
+                KeyEvent { code: KEYD_C,     pressed: 1, timestamp: last_key_time },
+                KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: trigger_time },
+            ]);
+
+            let mut cfg_i2 = Config::new();
+            config_parse_string(&mut cfg_i2,
+                "[ids]\n*\n\n[main]\nspace = overloadi2(a, b, 200, 1)\n"
+            ).unwrap();
+            let mut kbd_i2 = Keyboard::new(cfg_i2);
+            let mut output_i2 = TestOutput::new();
+            kbd_i2.kbd_process_events(&mut output_i2, &[
+                KeyEvent { code: KEYD_C,     pressed: 1, timestamp: last_key_time },
+                KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: trigger_time },
+            ]);
+
+            let sent_i: Vec<u8> = output_i.events.iter().map(|e| e.code).collect();
+            let sent_i2: Vec<u8> = output_i2.events.iter().map(|e| e.code).collect();
+            let expected = if expect_active { KEYD_A } else { KEYD_B };
+            assert!(sent_i.contains(&expected), "overloadi mismatch at trigger_time={trigger_time}");
+            assert!(sent_i2.contains(&expected), "overloadi2(streak=1) mismatch at trigger_time={trigger_time}");
+        }
+    }
+
+    #[test]
+    fn test_passthrough_release_resets_idle_clock() {
+        // space = overloadi(a, b, 200): pressing an unbound (passthrough) key 'x',
+        // holding it a long time, then releasing it should reset the idle clock on
+        // release — not just on press — so a key pressed shortly after release is
+        // still considered "recently active".
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nspace = overloadi(a, b, 200)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_X,     pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_X,     pressed: 0, timestamp: 1000 }, // long hold
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 1050 }, // 50ms after release
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let sent: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(sent.contains(&KEYD_A), "release of a passthrough key should reset the idle clock");
+        assert!(!sent.contains(&KEYD_B), "'b' must not fire since activity is recent (via release)");
+    }
+
+    #[test]
     fn test_macro_non_blocking_timeouts() {
         // a = macro(h 100ms e)
         let mut cfg = Config::new();
