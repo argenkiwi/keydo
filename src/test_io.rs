@@ -545,6 +545,58 @@ mod tests {
     }
 
     #[test]
+    fn test_overloadi_counts_held_key_down_as_activity() {
+        // capslock = overloadi(x, y, 100): idle measured since the last simple
+        // key-down, so a key that is pressed and held (never released) still
+        // counts as "recent activity".
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = overloadi(x, y, 100)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_A,        pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_A,        pressed: 0, timestamp: 5 },
+            // 'b' is pressed and held — never released before capslock fires.
+            KeyEvent { code: KEYD_B,        pressed: 1, timestamp: 1000 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 1050 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let sent: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(sent.contains(&KEYD_X), "held key's down event should count as recent activity");
+        assert!(!sent.contains(&KEYD_Y), "must not resolve as idle while a key-down was recent");
+    }
+
+    #[test]
+    fn test_overloadi2_ignores_held_key_down() {
+        // capslock = overloadi2(x, y, 100): idle measured since the last
+        // key-*up*, so a key that is pressed and held (never released) does
+        // NOT count as recent activity.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = overloadi2(x, y, 100)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_A,        pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_A,        pressed: 0, timestamp: 5 },
+            // 'b' is pressed and held — never released before capslock fires.
+            KeyEvent { code: KEYD_B,        pressed: 1, timestamp: 1000 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 1050 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let sent: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(sent.contains(&KEYD_Y), "held key's down event must not count as activity");
+        assert!(!sent.contains(&KEYD_X), "last real tap release was long ago, so this should resolve as idle");
+    }
+
+    #[test]
     fn test_macro_non_blocking_timeouts() {
         // a = macro(h 100ms e)
         let mut cfg = Config::new();

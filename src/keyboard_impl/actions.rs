@@ -24,6 +24,9 @@ impl Keyboard {
                     } else {
                         self.send_key(output, new_code, 0);
                         self.update_mods(output, -1, 0);
+                        if mods == 0 || mods == MOD_SHIFT {
+                            self.last_simple_key_up_time = time;
+                        }
                     }
                     if mods == 0 || mods == MOD_SHIFT {
                         self.last_simple_key_time = time;
@@ -39,6 +42,7 @@ impl Keyboard {
                     } else {
                         self.send_key(output, code, 0);
                         self.update_mods(output, -1, 0);
+                        self.last_simple_key_up_time = time;
                     }
                 }
             }
@@ -226,6 +230,24 @@ impl Keyboard {
             Op::OverloadIdleTimeout => {
                 if let DescriptorData::OverloadIdle(ov) = d.data && pressed != 0 {
                     let idle = time - self.last_simple_key_time;
+                    let action = if idle >= ov.timeout as i64 {
+                        self.config.descriptors[ov.action2_idx as usize]
+                    } else {
+                        self.config.descriptors[ov.action1_idx as usize]
+                    };
+                    self.execute_descriptor(output, action, code, layer, 1, time);
+                    for i in 0..16 {
+                        if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
+                            ce.d = action;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Op::OverloadIdleTimeout2 => {
+                if let DescriptorData::OverloadIdle(ov) = d.data && pressed != 0 {
+                    let idle = time - self.last_simple_key_up_time;
                     let action = if idle >= ov.timeout as i64 {
                         self.config.descriptors[ov.action2_idx as usize]
                     } else {

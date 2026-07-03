@@ -118,6 +118,7 @@ pub struct Keyboard {
     pub oneshot_timeout: i64,
     pub overload_start_time: i64,
     pub last_simple_key_time: i64,
+    pub last_simple_key_up_time: i64,
     pub timeouts: [i64; 128],
     pub nr_timeouts: usize,
     pub active_chords: Vec<ActiveChord>,

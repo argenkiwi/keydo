@@ -27,6 +27,7 @@ pub enum Op {
     OverloadTimeout,
     OverloadTimeoutTap,
     OverloadIdleTimeout,
+    OverloadIdleTimeout2,
     Toggle,
     ToggleM,
     Repeat,

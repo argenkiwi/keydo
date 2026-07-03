@@ -101,6 +101,19 @@ fn descriptor_accepts_deprecated_overload2_syntax() {
     assert!(res.is_ok(), "deprecated overload2 should still parse successfully");
 }
 
+#[test]
+fn descriptor_overloadi2_returns_overload_idle_timeout2_op() {
+    let mut cfg = make_base_config();
+    let mut ctx = ParseCtx::new();
+    let d = config_parse_descriptor("overloadi2(a, b, 300)", &mut cfg, &mut ctx).unwrap();
+    assert_eq!(d.op, Op::OverloadIdleTimeout2);
+    if let DescriptorData::OverloadIdle(ov) = d.data {
+        assert_eq!(ov.timeout, 300);
+    } else {
+        panic!("expected OverloadIdle data");
+    }
+}
+
 // ── config_parse_macro_expression ─────────────────────────────────────────────
 
 #[test]

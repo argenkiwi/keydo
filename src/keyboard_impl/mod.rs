@@ -36,6 +36,7 @@ impl Keyboard {
             oneshot_timeout: 0,
             overload_start_time: 0,
             last_simple_key_time: 0,
+            last_simple_key_up_time: 0,
             timeouts: [0; 128],
             nr_timeouts: 0,
             active_chords: {
