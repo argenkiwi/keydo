@@ -125,22 +125,24 @@ k = up
 l = right
 ```
 
-### `overloadi2` (keydo extension)
+### `overloadi` streak argument (keydo extension)
 
-`keydo` adds one action not found in upstream `keyd`: `overloadi2(action1, action2, timeout, streak)`.
+`keydo` extends `overloadi(action1, action2, timeout)` with an optional 4th
+argument not found in upstream `keyd`: `overloadi(action1, action2, timeout,
+streak)`.
 
-It generalizes `overloadi(action1, action2, timeout)`, which fires `action1` if
-you were typing within the last `timeout` ms and `action2` otherwise.
-`overloadi2` instead checks whether the last `streak` keystrokes *all*
-happened within the last `timeout` ms — useful for only treating a key
-specially once you've been in a genuine burst of typing, rather than just
-after any single recent key. `overloadi2(a, b, timeout, 1)` behaves the same
-as `overloadi(a, b, timeout)`. The maximum `streak` is 16.
+With no `streak` argument (or `streak = 1`), `overloadi` behaves exactly as
+in upstream `keyd`: it fires `action1` if you were typing within the last
+`timeout` ms, and `action2` otherwise. Setting `streak` to a higher value
+instead checks whether the last `streak` keystrokes *all* happened within the
+last `timeout` ms — useful for only treating a key specially once you've been
+in a genuine burst of typing, rather than just after any single recent key.
+The maximum `streak` is 16.
 
 ```ini
 # Fires 'a' if the last 3 keystrokes all happened within 200ms of each other
 # (a fast typing streak), otherwise fires 'b'.
-space = overloadi2(a, b, 200, 3)
+space = overloadi(a, b, 200, 3)
 ```
 
 ---

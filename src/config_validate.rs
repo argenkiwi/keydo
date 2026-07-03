@@ -170,15 +170,6 @@ fn check_descriptor_index_bounds(config: &Config, out: &mut Vec<ValidationError>
                     }
                 }
             }
-            DescriptorData::OverloadIdleStreak(ov) => {
-                for idx in [ov.action1_idx, ov.action2_idx] {
-                    if idx < 0 || idx as usize >= nd {
-                        out.push(ValidationError::error(format!(
-                            "{ctx}: descriptor index {idx} is out of range (0..{nd})"
-                        )));
-                    }
-                }
-            }
             DescriptorData::TimeoutOp(to) => {
                 for idx in [to.action1_idx, to.action2_idx] {
                     if idx < 0 || idx as usize >= nd {

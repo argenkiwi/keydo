@@ -193,6 +193,32 @@ pub fn config_parse_descriptor(
             return config_parse_descriptor(&expanded, config, ctx);
         }
 
+        if fn_name == "overloadi" {
+            if args.len() != 3 && args.len() != 4 {
+                return Err(ctx.error("overloadi requires 3 or 4 arguments"));
+            }
+            let action1 = config_parse_descriptor(&args[0], config, ctx)?;
+            let action1_idx = config.descriptors.len() as i16;
+            config.descriptors.push(action1);
+            let action2 = config_parse_descriptor(&args[1], config, ctx)?;
+            let action2_idx = config.descriptors.len() as i16;
+            config.descriptors.push(action2);
+            let timeout = args[2].parse::<i16>().map_err(|_| ctx.error(format!("Invalid number: {}", args[2])))? as u16;
+            let streak = if let Some(s) = args.get(3) {
+                let v = s.parse::<i16>().map_err(|_| ctx.error(format!("Invalid number: {s}")))?;
+                if v < 1 || v as usize > MAX_STREAK_HISTORY {
+                    return Err(ctx.error(format!("streak count must be between 1 and {MAX_STREAK_HISTORY}, got {v}")));
+                }
+                v as u16
+            } else {
+                1
+            };
+            return Ok(Descriptor {
+                op: Op::OverloadIdle,
+                data: DescriptorData::OverloadIdle(DescOverloadIdle { action1_idx, action2_idx, timeout, streak }),
+            });
+        }
+
         if fn_name == "oneshot" && args.len() >= 2 {
              if args.len() > 3 {
                  return Err(ctx.error("oneshot supports at most 3 layers"));
@@ -233,8 +259,6 @@ pub fn config_parse_descriptor(
             ("overload", Op::Overload, vec!["layer", "descriptor"]),
             ("overloadt", Op::OverloadTimeout, vec!["layer", "descriptor", "timeout"]),
             ("overloadt2", Op::OverloadTimeoutTap, vec!["layer", "descriptor", "timeout"]),
-            ("overloadi", Op::OverloadIdleTimeout, vec!["descriptor", "descriptor", "timeout"]),
-            ("overloadi2", Op::OverloadIdleStreak, vec!["descriptor", "descriptor", "timeout", "count"]),
             ("timeout", Op::Timeout, vec!["descriptor", "timeout", "descriptor"]),
             ("macro2", Op::Macro2, vec!["timeout", "timeout", "macro"]),
             ("setlayout", Op::Layout, vec!["layout"]),
@@ -295,13 +319,6 @@ pub fn config_parse_descriptor(
                         "timeout" | "sensitivity" => {
                             parsed_args.push(arg_str.parse::<i16>().map_err(|_| ctx.error(format!("Invalid number: {arg_str}")))?);
                         }
-                        "count" => {
-                            let v = arg_str.parse::<i16>().map_err(|_| ctx.error(format!("Invalid number: {arg_str}")))?;
-                            if v < 1 || v as usize > MAX_STREAK_HISTORY {
-                                return Err(ctx.error(format!("streak count must be between 1 and {MAX_STREAK_HISTORY}, got {v}")));
-                            }
-                            parsed_args.push(v);
-                        }
                         "macro" => {
                             let m = config_parse_macro_expression(arg_str)?;
                             let idx = config.macros.len();
@@ -318,8 +335,6 @@ pub fn config_parse_descriptor(
                     Op::SwapM | Op::ToggleM | Op::LayerM | Op::OneshotM => DescriptorData::LayerMacro(DescLayerMacro { idx: parsed_args[0], macro_idx: parsed_args[1] }),
                     Op::OneshotK | Op::Overload => DescriptorData::Overload(DescOverload { layer_idx: parsed_args[0], action_idx: parsed_args[1] }),
                     Op::OverloadTimeout | Op::OverloadTimeoutTap => DescriptorData::OverloadTo(DescOverloadTo { layer_idx: parsed_args[0], action_idx: parsed_args[1], timeout: parsed_args[2] as u16 }),
-                    Op::OverloadIdleTimeout => DescriptorData::OverloadIdle(DescOverloadIdle { action1_idx: parsed_args[0], action2_idx: parsed_args[1], timeout: parsed_args[2] as u16 }),
-                    Op::OverloadIdleStreak => DescriptorData::OverloadIdleStreak(DescOverloadIdleStreak { action1_idx: parsed_args[0], action2_idx: parsed_args[1], timeout: parsed_args[2] as u16, streak: parsed_args[3] as u16 }),
                     Op::Timeout => DescriptorData::TimeoutOp(DescTimeout { action1_idx: parsed_args[0], timeout: parsed_args[1] as u16, action2_idx: parsed_args[2] }),
                     Op::Macro2 => DescriptorData::Macro2(DescMacro2 { delay: parsed_args[0] as u16, interval: parsed_args[1] as u16, macro_idx: parsed_args[2] }),
                     Op::ScrollToggleOn | Op::ScrollToggle | Op::Scroll => DescriptorData::Scroll(DescScroll { sensitivity: parsed_args[0] }),

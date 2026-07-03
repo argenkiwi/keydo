@@ -102,35 +102,42 @@ fn descriptor_accepts_deprecated_overload2_syntax() {
 }
 
 #[test]
-fn descriptor_overloadi2_returns_op() {
+fn descriptor_overloadi_defaults_streak_to_one() {
     let mut cfg = make_base_config();
     let mut ctx = ParseCtx::new();
-    let d = config_parse_descriptor("overloadi2(a, b, 300, 3)", &mut cfg, &mut ctx).unwrap();
-    assert_eq!(d.op, Op::OverloadIdleStreak);
-}
-
-#[test]
-fn descriptor_overloadi2_references_correct_fields() {
-    let mut cfg = make_base_config();
-    let mut ctx = ParseCtx::new();
-    let d = config_parse_descriptor("overloadi2(a, b, 300, 3)", &mut cfg, &mut ctx).unwrap();
-    if let DescriptorData::OverloadIdleStreak(ov) = d.data {
+    let d = config_parse_descriptor("overloadi(a, b, 300)", &mut cfg, &mut ctx).unwrap();
+    assert_eq!(d.op, Op::OverloadIdle);
+    if let DescriptorData::OverloadIdle(ov) = d.data {
         assert_eq!(ov.timeout, 300);
-        assert_eq!(ov.streak, 3);
+        assert_eq!(ov.streak, 1);
     } else {
-        panic!("expected OverloadIdleStreak data");
+        panic!("expected OverloadIdle data");
     }
 }
 
 #[test]
-fn descriptor_overloadi2_rejects_streak_out_of_range() {
+fn descriptor_overloadi_accepts_explicit_streak() {
     let mut cfg = make_base_config();
     let mut ctx = ParseCtx::new();
-    assert!(config_parse_descriptor("overloadi2(a, b, 300, 0)", &mut cfg, &mut ctx).is_err());
+    let d = config_parse_descriptor("overloadi(a, b, 300, 3)", &mut cfg, &mut ctx).unwrap();
+    assert_eq!(d.op, Op::OverloadIdle);
+    if let DescriptorData::OverloadIdle(ov) = d.data {
+        assert_eq!(ov.timeout, 300);
+        assert_eq!(ov.streak, 3);
+    } else {
+        panic!("expected OverloadIdle data");
+    }
+}
+
+#[test]
+fn descriptor_overloadi_rejects_streak_out_of_range() {
+    let mut cfg = make_base_config();
+    let mut ctx = ParseCtx::new();
+    assert!(config_parse_descriptor("overloadi(a, b, 300, 0)", &mut cfg, &mut ctx).is_err());
 
     let mut cfg = make_base_config();
     let mut ctx = ParseCtx::new();
-    assert!(config_parse_descriptor("overloadi2(a, b, 300, 17)", &mut cfg, &mut ctx).is_err());
+    assert!(config_parse_descriptor("overloadi(a, b, 300, 17)", &mut cfg, &mut ctx).is_err());
 }
 
 // ── config_parse_macro_expression ─────────────────────────────────────────────

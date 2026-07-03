@@ -223,34 +223,16 @@ impl Keyboard {
                 }
             }
 
-            Op::OverloadIdleTimeout => {
+            Op::OverloadIdle => {
                 if let DescriptorData::OverloadIdle(ov) = d.data && pressed != 0 {
-                    let idle = time - self.last_simple_key_time;
-                    let action = if idle >= ov.timeout as i64 {
-                        self.config.descriptors[ov.action2_idx as usize]
-                    } else {
-                        self.config.descriptors[ov.action1_idx as usize]
-                    };
-                    self.execute_descriptor(output, action, code, layer, 1, time);
-                    for i in 0..16 {
-                        if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
-                            ce.d = action;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            Op::OverloadIdleStreak => {
-                if let DescriptorData::OverloadIdleStreak(ov) = d.data && pressed != 0 {
                     let streak = ov.streak as usize;
                     let action = if self.simple_key_history_count >= streak {
                         let idx = (self.simple_key_history_head + MAX_STREAK_HISTORY - streak) % MAX_STREAK_HISTORY;
-                        let age = time - self.simple_key_history[idx];
-                        if age <= ov.timeout as i64 {
-                            self.config.descriptors[ov.action1_idx as usize]
-                        } else {
+                        let idle = time - self.simple_key_history[idx];
+                        if idle >= ov.timeout as i64 {
                             self.config.descriptors[ov.action2_idx as usize]
+                        } else {
+                            self.config.descriptors[ov.action1_idx as usize]
                         }
                     } else {
                         self.config.descriptors[ov.action2_idx as usize]

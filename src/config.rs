@@ -27,8 +27,7 @@ pub enum Op {
     Overload,
     OverloadTimeout,
     OverloadTimeoutTap,
-    OverloadIdleTimeout,
-    OverloadIdleStreak,
+    OverloadIdle,
     Toggle,
     ToggleM,
     Repeat,
@@ -61,9 +60,7 @@ pub struct DescOverload { pub layer_idx: i16, pub action_idx: i16 }
 #[derive(Debug, Clone, Copy)]
 pub struct DescOverloadTo { pub layer_idx: i16, pub action_idx: i16, pub timeout: u16 }
 #[derive(Debug, Clone, Copy)]
-pub struct DescOverloadIdle { pub action1_idx: i16, pub action2_idx: i16, pub timeout: u16 }
-#[derive(Debug, Clone, Copy)]
-pub struct DescOverloadIdleStreak { pub action1_idx: i16, pub action2_idx: i16, pub timeout: u16, pub streak: u16 }
+pub struct DescOverloadIdle { pub action1_idx: i16, pub action2_idx: i16, pub timeout: u16, pub streak: u16 }
 #[derive(Debug, Clone, Copy)]
 pub struct DescTimeout { pub action1_idx: i16, pub timeout: u16, pub action2_idx: i16 }
 #[derive(Debug, Clone, Copy)]
@@ -81,7 +78,6 @@ pub enum DescriptorData {
     Overload(DescOverload),
     OverloadTo(DescOverloadTo),
     OverloadIdle(DescOverloadIdle),
-    OverloadIdleStreak(DescOverloadIdleStreak),
     TimeoutOp(DescTimeout),
     Macro2(DescMacro2),
     None,

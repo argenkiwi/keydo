@@ -117,7 +117,6 @@ pub struct Keyboard {
     pub overload_last_layer_code: i32,
     pub oneshot_timeout: i64,
     pub overload_start_time: i64,
-    pub last_simple_key_time: i64,
     pub simple_key_history: [i64; MAX_STREAK_HISTORY],
     pub simple_key_history_head: usize,
     pub simple_key_history_count: usize,
