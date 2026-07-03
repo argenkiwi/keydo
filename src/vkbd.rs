@@ -354,6 +354,18 @@ mod macos_vkbd {
                 macos_input::post_key(cgkey, state != 0, &key_states);
             }
 
+            // Modifier down events are posted as a separate CGEventFlagsChanged,
+            // a different CGEventType than the CGEventKeyDown that typically
+            // follows immediately (e.g. a held layer-modifier key + another key).
+            // CGEventPost gives no cross-type ordering guarantee, so without a
+            // moment to let the modifier state settle, the following key event
+            // can occasionally reach the target app before the modifier does —
+            // the same class of race worked around in the Linux backend above
+            // (see the comment on the button-event sleep in `send_key`).
+            if macos_input::is_modifier_cgkey(cgkey) && state != 0 {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+
             // Arm or cancel the software repeat timer for non-modifier keys.
             if !macos_input::is_modifier_cgkey(cgkey) {
                 let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
