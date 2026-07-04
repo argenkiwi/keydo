@@ -41,6 +41,14 @@ fn current_time_ms() -> i64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as i64
 }
 
+/// Wall-clock milliseconds since the Unix epoch, for `LayerListen` messages —
+/// deliberately not `current_time_ms()` above, which is process-relative and
+/// used for internal keyboard-state timing.
+fn epoch_time_ms() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+}
+
 fn caps_to_id_flags(caps: u8) -> u8 {
     let mut flags: u8 = 0;
     if caps & CAP_KEY != 0       { flags |= ID_KEY; }
@@ -619,11 +627,12 @@ impl<'a> Output for DaemonOutput<'a> {
         }
 
         if self.listeners.is_empty() { return; }
+        let ts = epoch_time_ms();
         let layer = &kbd.config.layers[layer_idx];
         let msg = if layer.layer_type == LayerType::Layout {
-            format!("/{}\n", layer.name)
+            format!("{ts}\t/{}\n", layer.name)
         } else {
-            format!("{}{}\n", if active != 0 { '+' } else { '-' }, layer.name)
+            format!("{ts}\t{}{}\n", if active != 0 { '+' } else { '-' }, layer.name)
         };
         let msg_bytes = msg.as_bytes();
         // Drop (and thereby close) any listener whose connection has gone away.

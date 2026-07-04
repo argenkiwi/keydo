@@ -158,6 +158,38 @@ keydo listen
 keydo list-keys
 ```
 
+Both `monitor` and `listen` prefix every line with an absolute Unix epoch-millisecond
+timestamp, so output captured from both commands at the same time can be
+cross-correlated by timestamp (e.g. to see which key press caused a layer change).
+Both also accept a `-j`/`--json` flag that emits one JSON object per line instead of
+plain text — handy for piping logs to a script or a coding agent.
+
+`keydo monitor` (plain text, tab-separated):
+```
+1751654321045	Apple Internal Keyboard	0003:05ac:0256	a down
+```
+Pass `-t`/`--timestamp` to additionally print the relative delta (in ms) since the
+previous event, inserted as the second column:
+```
+1751654321045	+12 ms	Apple Internal Keyboard	0003:05ac:0256	a down
+```
+`keydo monitor --json`:
+```json
+{"seq":0,"ts_ms":1751654321045,"delta_ms":null,"device_name":"Apple Internal Keyboard","device_id":"0003:05ac:0256","keycode":30,"key":"a","event":"key","direction":"down"}
+```
+
+`keydo listen` (plain text): still uses the `+`/`-`/`/` sigil to mean
+layer-activated / layer-deactivated / layout-switched, now with a leading timestamp:
+```
+1751654321045	+nav
+1751654321980	/dvorak
+```
+`keydo listen --json` turns the sigil into named `event`/`action` fields:
+```json
+{"seq":0,"ts_ms":1751654321045,"event":"layer","layer":"nav","action":"activate"}
+{"seq":1,"ts_ms":1751654321980,"event":"layout","layer":"dvorak","action":"switch"}
+```
+
 ### Input & Macro Injection
 ```bash
 # Inject raw text
