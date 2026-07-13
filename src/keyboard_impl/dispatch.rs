@@ -92,13 +92,13 @@ impl Keyboard {
                     return self.calculate_main_loop_timeout(time);
                 }
                 let (d, layer) = self.resolve_descriptor(code);
-                self.cache_set(code, Some(CacheEntry { code, d, dl: layer, layer }));
+                self.cache_set(code, Some(CacheEntry { code, d, dl: layer, layer: 0 }));
                 self.execute_descriptor(output, d, code, layer, pressed, time);
             } else if let Some(entry) = self.cache_get(code) {
                 let d = entry.d;
-                let layer = entry.layer;
+                let dl = entry.dl;
                 self.cache_set(code, None);
-                self.execute_descriptor(output, d, code, layer, pressed, time);
+                self.execute_descriptor(output, d, code, dl, pressed, time);
             }
         }
 
