@@ -663,4 +663,53 @@ mod tests {
         assert!(codes.contains(&KEYD_RIGHT), "tie should go to the higher-index layer (nav2) → right");
         assert!(!codes.contains(&KEYD_LEFT), "nav1 binding must not fire on a tie");
     }
+
+    // ── Cache entry `layer` sentinel (swap-target hijack regression) ─────────
+    //
+    // Reduced from a randomized-fuzz repro against the real kenkyo config.
+    // Before the fix, `process_event` cached a key-down's *lookup* layer
+    // (the layer it was resolved against) instead of a `0` sentinel — only
+    // `activate_layer` is supposed to stamp a cache entry with a real layer
+    // index, marking it as the key currently holding that layer active.
+    // `Op::Swap` searches the cache for the entry whose `layer` field matches
+    // the active source layer; with every same-layer keypress tagged that
+    // way, swap could hijack an unrelated key's cache slot instead of the
+    // layer's true holder, permanently losing that key's release action.
+
+    #[test]
+    fn test_swap_does_not_hijack_unrelated_key_cache_entry() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [main]\n\
+             s = overloadi(s, timeout(overloadt2(alt, s, 200), 500, s), 150)\n\
+             space = overloadi(space, timeout(overloadt2(extend, space, 200), 500, space), 150)\n\
+             k = overloadi(k, timeout(overloadt2(shift, k, 200), 500, k), 150)\n\n\
+             [extend]\n\
+             e = swap(shift)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_S,     pressed: 1, timestamp: 1130 },
+            KeyEvent { code: KEYD_SPACE, pressed: 1, timestamp: 1135 },
+            KeyEvent { code: KEYD_K,     pressed: 1, timestamp: 1165 },
+            KeyEvent { code: KEYD_S,     pressed: 0, timestamp: 1915 },
+            KeyEvent { code: KEYD_E,     pressed: 1, timestamp: 2655 },
+            KeyEvent { code: KEYD_SPACE, pressed: 0, timestamp: 4310 },
+            KeyEvent { code: KEYD_K,     pressed: 0, timestamp: 4400 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+        // Give any pending timeouts a chance to resolve.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 8000 }]);
+
+        for i in 0..256usize {
+            assert_eq!(kbd.keystate[i], 0, "output key {i} left stuck down");
+        }
+        for i in 1..kbd.config.layers.len() {
+            let ls = &kbd.layer_state[i];
+            assert_eq!(ls.active, 0, "layer '{}' left active", kbd.config.layers[i].name);
+        }
+    }
 }
