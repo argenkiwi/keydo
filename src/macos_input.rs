@@ -97,6 +97,8 @@ unsafe extern "C" {
     pub fn CGEventCreateKeyboardEvent(
         source: *const c_void, key: CGKeyCode, key_down: bool,
     ) -> CGEventRef;
+    fn CGEventSourceKeyState(state_id: u32, key: CGKeyCode) -> bool;
+
 
     // CFPreferences — for reading system key-repeat settings.
     fn CFPreferencesGetAppIntegerValue(
@@ -662,3 +664,10 @@ pub fn post_key(cgkey: u16, pressed: bool, key_states: &[u8; 128]) {
         CFRelease(ev as CFTypeRef);
     }
 }
+
+/// Check if a physical key is currently pressed on macOS.
+pub fn is_key_pressed(cgkey: u16) -> bool {
+    // kCGEventSourceStateHIDSystemState = 1
+    unsafe { CGEventSourceKeyState(1, cgkey) }
+}
+

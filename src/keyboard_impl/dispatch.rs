@@ -62,9 +62,13 @@ impl Keyboard {
     }
 
     pub(super) fn process_event<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) -> i64 {
+        #[cfg(target_os = "macos")]
+        self.check_and_release_stuck_keys(output, code, time);
+
         if self.handle_chord(output, code, pressed, time) {
             return self.calculate_main_loop_timeout(time);
         }
+
 
         self.handle_pending_timeout(output, code, pressed, time);
 
@@ -104,4 +108,31 @@ impl Keyboard {
 
         self.calculate_main_loop_timeout(time)
     }
+
+    #[cfg(target_os = "macos")]
+    fn check_and_release_stuck_keys<O: Output>(&mut self, output: &mut O, current_code: u8, time: i64) {
+        let mut to_release = Vec::new();
+        for i in 0..16 {
+            if let Some(entry) = self.cache[i] {
+                if entry.code == current_code {
+                    continue;
+                }
+                if let Some(cgkey) = crate::macos_input::keyd_to_cgkey_code(entry.code) {
+                    if !crate::macos_input::is_key_pressed(cgkey) {
+                        to_release.push(entry.code);
+                    }
+                }
+            }
+        }
+        for code in to_release {
+            log::info!("Detected stuck key: keyd_code={}, simulating key release", code);
+            if let Some(entry) = self.cache_get(code) {
+                let d = entry.d;
+                let dl = entry.dl;
+                self.cache_set(code, None);
+                self.execute_descriptor(output, d, code, dl, 0, time);
+            }
+        }
+    }
 }
+
