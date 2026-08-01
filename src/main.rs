@@ -28,7 +28,7 @@ pub mod test_io;
 
 use clap::{Parser, Subcommand};
 use crate::daemon::Daemon;
-use crate::device::{Device, DeviceEventType};
+use crate::device::{Device, DeviceEventType, ReadResult};
 use crate::ipc::{IpcMessage, IpcMessageType};
 use crate::keys::KEYCODE_TABLE;
 use std::io::{self, Read, Write};
@@ -246,9 +246,34 @@ fn main() {
             let start = std::time::Instant::now();
             let mut last_ms: i64 = 0;
 
+            // On unix the devices are pollable descriptors (evdev fds on Linux,
+            // the CGEventTap pipe on macOS), so block until one is readable
+            // rather than waking a thousand times a second to find nothing.
+            // Windows has no pollable fd — events arrive over a channel — so it
+            // keeps the short sleep.
+            #[cfg(unix)]
+            let mut pfds: Vec<libc::pollfd> = devices.iter()
+                .map(|d| libc::pollfd { fd: d.fd, events: libc::POLLIN | libc::POLLERR, revents: 0 })
+                .collect();
+
             loop {
+                #[cfg(unix)]
+                {
+                    for pfd in &mut pfds {
+                        pfd.revents = 0;
+                    }
+                    // SAFETY: pfds is a valid contiguous slice; nfds is its exact
+                    // length; -1 blocks until a descriptor is ready.
+                    unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, -1) };
+                }
+
                 for dev in &mut devices {
-                    while let Some(ev) = dev.read_event() {
+                    loop {
+                        let ev = match dev.read_event() {
+                            ReadResult::Event(ev) => ev,
+                            ReadResult::Ignored => continue,
+                            ReadResult::Idle => break,
+                        };
                         if ev.event_type == DeviceEventType::Key {
                             let now = start.elapsed().as_millis() as i64;
                             let name = KEYCODE_TABLE[ev.code as usize].name.unwrap_or("UNKNOWN");
@@ -264,6 +289,8 @@ fn main() {
                         }
                     }
                 }
+
+                #[cfg(not(unix))]
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }

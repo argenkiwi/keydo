@@ -16,8 +16,10 @@ mod timeout_handler;
 impl Keyboard {
     /// Create a new keyboard instance from a parsed config.
     pub fn new(config: Config) -> Self {
+        let has_chords = config.layers.iter().any(|l| l.nr_chords > 0);
         Self {
             config,
+            has_chords,
             cache: [None; 16],
             last_pressed_output_code: 0,
             last_pressed_code: 0,
@@ -47,10 +49,10 @@ impl Keyboard {
                     },
                     layer: 0,
                 };
-                vec![E; 8]
+                [E; MAX_ACTIVE_CHORDS]
             },
             chord: ChordState {
-                queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
+                queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; CHORD_QUEUE_LEN],
                 queue_sz: 0,
                 match_idx: None,
                 match_layer: -1,

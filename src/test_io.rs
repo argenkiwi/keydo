@@ -20,6 +20,23 @@ impl Output for TestOutput {
     fn on_layer_change(&mut self, _kbd: &Keyboard, _layer_idx: usize, _active: u8) {}
 }
 
+/// Output sink that only counts, for the throughput harness — an unbounded
+/// `Vec` push would otherwise dominate the measurement.
+#[derive(Default)]
+pub struct CountingOutput {
+    pub keys: u64,
+    pub layer_changes: u64,
+}
+
+impl Output for CountingOutput {
+    fn send_key(&mut self, _code: u8, _state: u8) {
+        self.keys += 1;
+    }
+    fn on_layer_change(&mut self, _kbd: &Keyboard, _layer_idx: usize, _active: u8) {
+        self.layer_changes += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,5 +728,96 @@ mod tests {
             let ls = &kbd.layer_state[i];
             assert_eq!(ls.active, 0, "layer '{}' left active", kbd.config.layers[i].name);
         }
+    }
+
+    // ── has_chords fast-path guard ───────────────────────────────────────────
+    //
+    // `handle_chord` short-circuits on `!has_chords`, which is computed once in
+    // `Keyboard::new`. That is only sound because `nr_chords` is written solely
+    // by the parse-time `set_layer_entry` — the IPC `bind` path
+    // (`config_add_entry`) touches `keymap` only, and `reload` builds fresh
+    // `Keyboard`s. If chords ever become addable at runtime, this breaks.
+
+    #[test]
+    fn has_chords_reflects_parsed_config() {
+        let mut without = Config::new();
+        config_parse_string(&mut without, "[ids]\n*\n\n[main]\na = b\n").unwrap();
+        assert!(!Keyboard::new(without).has_chords);
+
+        let mut with = Config::new();
+        config_parse_string(&mut with, "[ids]\n*\n\n[main]\nd+f = esc\n").unwrap();
+        assert!(Keyboard::new(with).has_chords);
+    }
+
+    #[test]
+    fn ipc_bind_cannot_introduce_chords_behind_has_chords() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\na = b\n").unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        assert!(!kbd.has_chords);
+
+        crate::config_impl::config_add_entry(&mut kbd.config, "main.c = d").unwrap();
+
+        let total_chords: usize = kbd.config.layers.iter().map(|l| l.nr_chords).sum();
+        assert_eq!(total_chords, 0, "bind added a chord; has_chords is now stale");
+    }
+
+    // ── Throughput harness ───────────────────────────────────────────────────
+    //
+    // Not a correctness test — a repeatable before/after number for changes to
+    // the state machine hot path. Run it with:
+    //
+    //     cargo test --release -- --ignored --nocapture
+    //
+    // Release mode matters: the debug build is dominated by bounds checks and
+    // unelided copies and will not reflect what the daemon actually runs.
+
+    #[test]
+    #[ignore = "timing harness, not a correctness check"]
+    fn bench_kbd_process_events_throughput() {
+        const ITERATIONS: usize = 250_000; // 4 events each → 1M events
+
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [main]\n\
+             a = b\n\
+             capslock = layer(nav)\n\
+             s = overload(nav, s)\n\n\
+             [nav]\n\
+             h = left\n\
+             j = down\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = CountingOutput::default();
+
+        // A plain remap plus a held layer with a key pressed inside it — the
+        // common mix, exercising resolve_descriptor, the cache, update_mods
+        // and the layer bookkeeping.
+        let start = std::time::Instant::now();
+        let mut ts: i32 = 0;
+        for _ in 0..ITERATIONS {
+            let events = [
+                KeyEvent { code: KEYD_A,        pressed: 1, timestamp: ts },
+                KeyEvent { code: KEYD_A,        pressed: 0, timestamp: ts + 1 },
+                KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: ts + 2 },
+                KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: ts + 3 },
+            ];
+            kbd.kbd_process_events(&mut output, &events);
+            ts += 4;
+        }
+        let elapsed = start.elapsed();
+
+        let n_events = (ITERATIONS * 4) as u32;
+        println!(
+            "kbd_process_events: {n_events} events in {elapsed:?} \
+             ({:.1} ns/event, {} keys out, {} layer changes)",
+            elapsed.as_secs_f64() * 1e9 / f64::from(n_events),
+            output.keys,
+            output.layer_changes,
+        );
+
+        // Guard against the harness silently measuring nothing.
+        assert!(output.keys > 0, "harness produced no output");
     }
 }

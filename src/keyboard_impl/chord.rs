@@ -85,14 +85,17 @@ impl Keyboard {
             }
         }
 
+        // Snapshot onto the stack: kbd_process_events needs &mut self, and the
+        // queue is a fixed 32 slots, so there is nothing to allocate for.
         let flush_sz = queue_sz.saturating_sub(queue_offset);
-        let flush: Vec<KeyEvent> = self.chord.queue[queue_offset..queue_offset + flush_sz].to_vec();
+        let mut flush = [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; CHORD_QUEUE_LEN];
+        flush[..flush_sz].copy_from_slice(&self.chord.queue[queue_offset..queue_offset + flush_sz]);
 
         self.chord.queue_sz = 0;
         self.chord.match_idx = None;
 
         if flush_sz > 0 {
-            self.kbd_process_events(output, &flush);
+            self.kbd_process_events(output, &flush[..flush_sz]);
         }
 
         self.chord.state = ChordStatus::Inactive;
@@ -105,6 +108,14 @@ impl Keyboard {
     }
 
     pub(super) fn handle_chord<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) -> bool {
+        // With no chords configured no slot can ever activate and the state
+        // machine can never leave Inactive, so skip the per-event walk over
+        // every active layer that check_chord_match would otherwise do.
+        if !self.has_chords {
+            debug_assert_eq!(self.chord.state, ChordStatus::Inactive);
+            return false;
+        }
+
         let interkey_timeout = self.config.chord_interkey_timeout;
         let hold_timeout     = self.config.chord_hold_timeout;
 

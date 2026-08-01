@@ -26,11 +26,10 @@ impl Keyboard {
     pub(super) fn activate_layer<O: Output>(&mut self, output: &mut O, code: u8, idx: usize, time: i64) {
         self.layer_state[idx].activation_time = time;
         self.layer_state[idx].active += 1;
-        for i in 0..16 {
-            if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
-                ce.layer = idx as i32;
-                break;
-            }
+        // Stamp the key holding this layer active — Op::Swap looks the holder up
+        // by this field, so it must only ever be set here.
+        if let Some(ce) = self.cache_find_mut(code) {
+            ce.layer = idx as i32;
         }
         output.on_layer_change(self, idx, 1);
     }

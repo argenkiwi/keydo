@@ -169,11 +169,8 @@ impl Keyboard {
                 if pressed != 0 {
                     let ra = self.last_repeatable_action;
                     self.execute_descriptor(output, ra, code, layer, 1, time);
-                    for i in 0..16 {
-                        if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
-                            ce.d = ra;
-                            break;
-                        }
+                    if let Some(ce) = self.cache_find_mut(code) {
+                        ce.d = ra;
                     }
                 }
             }
@@ -232,11 +229,8 @@ impl Keyboard {
                         self.config.descriptors[ov.action1_idx as usize]
                     };
                     self.execute_descriptor(output, action, code, layer, 1, time);
-                    for i in 0..16 {
-                        if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
-                            ce.d = action;
-                            break;
-                        }
+                    if let Some(ce) = self.cache_find_mut(code) {
+                        ce.d = action;
                     }
                 }
             }
