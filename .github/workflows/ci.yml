@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+env:
+  # Force every action's JS to run on Node 24, ahead of the fall 2026 removal
+  # of Node 20 from GitHub-hosted runners, rather than whatever each
+  # third-party action's own action.yml still declares.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
