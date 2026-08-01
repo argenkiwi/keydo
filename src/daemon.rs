@@ -500,7 +500,7 @@ impl Daemon {
             }
 
             // ── IPC connections ───────────────────────────────────────────
-            if ipc_pfd_idx.filter(|&idx| pfds[idx].revents & libc::POLLIN != 0).is_some() {
+            if ipc_pfd_idx.is_some_and(|idx| pfds[idx].revents & libc::POLLIN != 0) {
                 let conn_opt = self.ipc_server.as_ref()
                     .and_then(|s| s.accept().ok());
                 if let Some(conn) = conn_opt {
@@ -527,8 +527,7 @@ impl Daemon {
             // ── Hot-plug (Linux only) ─────────────────────────────────────
             #[cfg(target_os = "linux")]
             if let Some((_idx, ino)) = devmon_pfd_idx
-                .filter(|&idx| pfds[idx].revents & libc::POLLIN != 0)
-                .and_then(|idx| devmon.as_mut().map(|ino| (idx, ino)))
+                .filter(|&idx| pfds[idx].revents & libc::POLLIN != 0).zip(devmon.as_mut())
             {
                 let mut buf = [0u8; 4096];
                 if let Ok(events) = ino.read_events(&mut buf) {
@@ -539,7 +538,7 @@ impl Daemon {
                                 let path = format!("/dev/input/{name_str}");
                                 if let Ok(mut dev) = Device::init(&path) {
                                     let kbd_idx = manage_device(&self.keyboards, &mut dev);
-                                    log::info!("DEVICE: hot-plugged {}", path);
+                                    log::info!("DEVICE: hot-plugged {path}");
                                     self.devices.push(dev);
                                     self.device_kbd.push(kbd_idx);
                                     pfds_dirty = true;

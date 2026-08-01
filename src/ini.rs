@@ -85,16 +85,13 @@ pub fn ini_parse_string(s: &str, default_section_name: Option<&str>) -> Option<I
         }
 
         if current_section.is_none() {
-            if let Some(default_name) = default_section_name {
-                ini.sections.push(IniSection {
-                    name: default_name.to_string(),
-                    entries: Vec::new(),
-                    lnum: 0,
-                });
-                current_section = Some(0);
-            } else {
-                return None;
-            }
+            let default_name = default_section_name?;
+            ini.sections.push(IniSection {
+                name: default_name.to_string(),
+                entries: Vec::new(),
+                lnum: 0,
+            });
+            current_section = Some(0);
         }
 
         let idx = current_section?;

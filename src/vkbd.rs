@@ -172,7 +172,7 @@ mod linux {
         }
 
         pub fn send_key(&self, code: u8, state: u8) {
-            let _lock = self.mtx.lock().unwrap();
+            let _lock = self.mtx.lock().unwrap_or_else(|e| e.into_inner());
             let mut is_btn = true;
             let mapped_code = match code {
                 KEYD_LEFT_MOUSE => BTN_LEFT,
@@ -198,8 +198,8 @@ mod linux {
                 self.fd.as_raw_fd()
             };
 
-            self.write_event(fd, EV_KEY, mapped_code, state as i32);
-            self.write_event(fd, EV_SYN, 0, 0);
+            Self::write_event(fd, EV_KEY, mapped_code, state as i32);
+            Self::write_event(fd, EV_SYN, 0, 0);
         }
 
         /// Raw fd of the virtual keyboard uinput device (for reading LED feedback).
@@ -228,22 +228,22 @@ mod linux {
         }
 
         pub fn mouse_move(&self, x: i32, y: i32) {
-            let _lock = self.mtx.lock().unwrap();
+            let _lock = self.mtx.lock().unwrap_or_else(|e| e.into_inner());
             let fd = self.pfd.as_raw_fd();
-            if x != 0 { self.write_event(fd, EV_REL, REL_X, x); }
-            if y != 0 { self.write_event(fd, EV_REL, REL_Y, y); }
-            if x != 0 || y != 0 { self.write_event(fd, EV_SYN, 0, 0); }
+            if x != 0 { Self::write_event(fd, EV_REL, REL_X, x); }
+            if y != 0 { Self::write_event(fd, EV_REL, REL_Y, y); }
+            if x != 0 || y != 0 { Self::write_event(fd, EV_SYN, 0, 0); }
         }
 
         pub fn mouse_scroll(&self, x: i32, y: i32) {
-            let _lock = self.mtx.lock().unwrap();
+            let _lock = self.mtx.lock().unwrap_or_else(|e| e.into_inner());
             let fd = self.pfd.as_raw_fd();
-            if y != 0 { self.write_event(fd, EV_REL, REL_WHEEL, y); }
-            if x != 0 { self.write_event(fd, EV_REL, REL_HWHEEL, x); }
-            if x != 0 || y != 0 { self.write_event(fd, EV_SYN, 0, 0); }
+            if y != 0 { Self::write_event(fd, EV_REL, REL_WHEEL, y); }
+            if x != 0 { Self::write_event(fd, EV_REL, REL_HWHEEL, x); }
+            if x != 0 || y != 0 { Self::write_event(fd, EV_SYN, 0, 0); }
         }
 
-        fn write_event(&self, fd: RawFd, type_: u16, code: u16, value: i32) {
+        fn write_event(fd: RawFd, type_: u16, code: u16, value: i32) {
             // SAFETY: input_event is #[repr(C)] with integer fields valid when zero-initialized.
             let mut ev: input_event = unsafe { std::mem::zeroed() };
             ev.type_ = type_;

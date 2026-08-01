@@ -179,12 +179,10 @@ fn check_descriptor_index_bounds(config: &Config, out: &mut Vec<ValidationError>
                     }
                 }
             }
-            DescriptorData::Macro2(m) => {
-                if m.macro_idx < 0 || m.macro_idx as usize >= nm {
-                    out.push(ValidationError::error(format!(
-                        "{ctx}: macro index {} is out of range (0..{nm})", m.macro_idx
-                    )));
-                }
+            DescriptorData::Macro2(m) if m.macro_idx < 0 || m.macro_idx as usize >= nm => {
+                out.push(ValidationError::error(format!(
+                    "{ctx}: macro index {} is out of range (0..{nm})", m.macro_idx
+                )));
             }
             _ => {}
         }

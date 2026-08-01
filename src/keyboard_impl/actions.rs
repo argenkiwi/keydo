@@ -138,8 +138,8 @@ impl Keyboard {
                     if d.op == Op::SwapM && let DescriptorData::LayerMacro(lm) = d.data {
                         self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
-                } else if d.op == Op::SwapM {
-                    if let DescriptorData::LayerMacro(lm) = d.data {
+                } else if d.op == Op::SwapM
+                    && let DescriptorData::LayerMacro(lm) = d.data {
                         let mac = self.config.macros[lm.macro_idx as usize];
                         if mac.sz == 1 && mac.entries[0].entry_type == crate::macro_types::MacroEntryType::KeySequence {
                             let c = (mac.entries[0].data & 0xFF) as u8;
@@ -147,7 +147,6 @@ impl Keyboard {
                             self.update_mods(output, -1, 0);
                         }
                     }
-                }
             }
 
             Op::Clear => {
@@ -251,11 +250,10 @@ impl Keyboard {
                             action2,
                         });
                         self.schedule_timeout(expiration);
-                    } else if let Some(ref mut pt) = self.pending_timeout {
-                        if pt.code == code && time == pt.activation_time {
+                    } else if let Some(ref mut pt) = self.pending_timeout
+                        && pt.code == code && time == pt.activation_time {
                             pt.spontaneous = 1;
                         }
-                    }
                 }
             }
 

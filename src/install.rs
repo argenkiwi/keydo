@@ -133,7 +133,7 @@ pub fn install(init: InitSystem) -> Result<(), String> {
         other => other,
     };
 
-    ensure_keydo_user()?;
+    ensure_keydo_user();
 
     match resolved {
         InitSystem::Systemd => install_systemd(&exe),
@@ -143,7 +143,7 @@ pub fn install(init: InitSystem) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn ensure_keydo_user() -> Result<(), String> {
+fn ensure_keydo_user() {
     // 1. Create keydo group if it doesn't exist
     let _ = run_cmd("groupadd", &["-f", "keydo"]);
 
@@ -152,8 +152,6 @@ fn ensure_keydo_user() -> Result<(), String> {
         let _ = run_cmd("usermod", &["-aG", "keydo", &sudo_user]);
         println!("Added user '{sudo_user}' to the 'keydo' group. You may need to log out and back in for this to take effect.");
     }
-
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]

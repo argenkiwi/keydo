@@ -200,12 +200,25 @@ const EVIOCGRAB: libc::c_ulong = 0x4004_4590;
 fn map_extended_key(code: u16) -> Option<u8> {
     use crate::keys::*;
     Some(match code {
-        // Mouse buttons (BTN_0..BTN_9 = 0x100..0x109)
-        0x100 => KEYD_F13, 0x101 => KEYD_F14, 0x102 => KEYD_F15,
-        0x103 => KEYD_F16, 0x104 => KEYD_F17, 0x105 => KEYD_F18,
-        0x106 => KEYD_F19, 0x107 => KEYD_F20, 0x108 => KEYD_F21,
-        0x109 => KEYD_F22,
-        // BTN_LEFT..BTN_TASK (0x110..0x117)
+        // BTN_0..BTN_9 (0x100..0x109), KEY_PROG1..4 (0x148..0x14b), KEY_FN_F1..F12
+        // (0x1d2..0x1dd), KEY_FN_RIGHT_SHIFT (0x1e5), KEY_KEYBOARD (0x1b0),
+        // KEY_TOUCHPAD_TOGGLE/OFF/ON (0x212..0x214), KEY_NOTIFICATION_CENTER (0x246),
+        // KEY_PICKUP_PHONE/HANGUP_PHONE (0x289/0x28a/0x290), keyboard LCD menu keys
+        // (0x222..0x226), KEY_EDITOR..KEY_MESSENGER (0x1b2..0x1bb), BTN_TASK (0x117)
+        // and KEY_ACCESSIBILITY (0x286) all alias onto F13..F24.
+        0x100 | 0x1d2 | 0x1e5 | 0x1b2 => KEYD_F13,
+        0x101 | 0x1d3 | 0x1b0 | 0x1b3 => KEYD_F14,
+        0x102 | 0x1d4 | 0x1b4 => KEYD_F15,
+        0x103 | 0x1d5 | 0x1b5 => KEYD_F16,
+        0x104 | 0x1d6 | 0x213 | 0x1b6 => KEYD_F17,
+        0x105 | 0x117 | 0x1d7 | 0x214 | 0x1b7 => KEYD_F18,
+        0x106 | 0x1d8 | 0x1b8 => KEYD_F19,
+        0x107 | 0x1d9 | 0x222 | 0x1b9 => KEYD_F20,
+        0x108 | 0x148 | 0x1da | 0x212 | 0x246 | 0x223 | 0x1bb => KEYD_F21,
+        0x109 | 0x149 | 0x1db | 0x289 | 0x224 => KEYD_F22,
+        0x14a | 0x1dc | 0x28a | 0x290 | 0x225 | 0x286 => KEYD_F23,
+        0x14b | 0x1dd | 0x226 => KEYD_F24,
+        // BTN_LEFT..BTN_BACK (0x110..0x116)
         0x110 => KEYD_LEFT_MOUSE,
         0x111 => KEYD_RIGHT_MOUSE,
         0x112 => KEYD_MIDDLE_MOUSE,
@@ -213,37 +226,12 @@ fn map_extended_key(code: u16) -> Option<u8> {
         0x114 => KEYD_MOUSE_2,
         0x115 => KEYD_MOUSE_FORWARD,
         0x116 => KEYD_MOUSE_BACK,
-        0x117 => KEYD_F18, // BTN_TASK
-        // KEY_PROG1..4 (0x148..0x14b)
-        0x148 => KEYD_F21, 0x149 => KEYD_F22, 0x14a => KEYD_F23, 0x14b => KEYD_F24,
         // KEY_FAVORITES (0x164)
         0x164 => KEYD_BOOKMARKS,
         // KEY_ZOOM (0x174)
         0x174 => KEYD_ZOOM,
-        // KEY_FN (0x1d0) and KEY_FN_F1..F12 (0x1d2..0x1dd), KEY_FN_RIGHT_SHIFT (0x1e5)
+        // KEY_FN (0x1d0)
         0x1d0 => KEYD_FN,
-        0x1d2 => KEYD_F13, 0x1d3 => KEYD_F14, 0x1d4 => KEYD_F15,
-        0x1d5 => KEYD_F16, 0x1d6 => KEYD_F17, 0x1d7 => KEYD_F18,
-        0x1d8 => KEYD_F19, 0x1d9 => KEYD_F20, 0x1da => KEYD_F21,
-        0x1db => KEYD_F22, 0x1dc => KEYD_F23, 0x1dd => KEYD_F24,
-        0x1e5 => KEYD_F13, // KEY_FN_RIGHT_SHIFT
-        // KEY_KEYBOARD (0x1b0)
-        0x1b0 => KEYD_F14,
-        // KEY_TOUCHPAD_TOGGLE/OFF/ON (0x212..0x214)
-        0x212 => KEYD_F21, 0x213 => KEYD_F17, 0x214 => KEYD_F18,
-        // KEY_NOTIFICATION_CENTER (0x246)
-        0x246 => KEYD_F21,
-        // KEY_PICKUP_PHONE (0x289), KEY_HANGUP_PHONE (0x28a)
-        0x289 => KEYD_F22, 0x28a => KEYD_F23, 0x290 => KEYD_F23,
-        // Miscellaneous keyboard LCD menu keys (0x222..0x226)
-        0x222 => KEYD_F20, 0x223 => KEYD_F21, 0x224 => KEYD_F22,
-        0x225 => KEYD_F23, 0x226 => KEYD_F24,
-        // KEY_EDITOR..KEY_MESSENGER (0x1b2..0x1bb)
-        0x1b2 => KEYD_F13, 0x1b3 => KEYD_F14, 0x1b4 => KEYD_F15,
-        0x1b5 => KEYD_F16, 0x1b6 => KEYD_F17, 0x1b7 => KEYD_F18,
-        0x1b8 => KEYD_F19, 0x1b9 => KEYD_F20, 0x1bb => KEYD_F21,
-        // KEY_ACCESSIBILITY (0x286)
-        0x286 => KEYD_F23,
         _ => return None,
     })
 }
@@ -306,9 +294,11 @@ impl Device {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if fname.starts_with("event") && let Ok(dev) = Device::init(path.to_str().unwrap()) {
-                    devices.push(dev);
-                }
+                if fname.starts_with("event")
+                    && let Some(path_str) = path.to_str()
+                    && let Ok(dev) = Device::init(path_str) {
+                        devices.push(dev);
+                    }
             }
         }
         devices
@@ -321,14 +311,14 @@ impl Device {
             libc::open(cpath.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC)
         };
         if fd < 0 {
-            return Err(format!("Failed to open {}", path));
+            return Err(format!("Failed to open {path}"));
         }
 
         let (caps, num_keys, relmask, absmask) = resolve_device_capabilities(fd);
         if caps == 0 {
             // SAFETY: fd was successfully opened above and has not been closed.
             unsafe { libc::close(fd) };
-            return Err(format!("{} has no usable capabilities", path));
+            return Err(format!("{path} has no usable capabilities"));
         }
 
         let mut name_buf = [0u8; 64];

@@ -25,8 +25,8 @@ impl Keyboard {
         }
 
         // Enqueue real (non-synthetic) events.
-        if code != 0 {
-            if let Some(po) = self.pending_overload.as_mut() {
+        if code != 0
+            && let Some(po) = self.pending_overload.as_mut() {
                 debug_assert!(
                     po.queue_sz < po.queue.len(),
                     "pending_overload queue full ({CHORD_QUEUE_LEN} slots) enqueuing code {code}"
@@ -36,7 +36,6 @@ impl Keyboard {
                     po.queue_sz += 1;
                 }
             }
-        }
 
         // Decide if we can resolve now.
         let resolve: Option<Descriptor> = if let Some(po) = self.pending_overload.as_ref() {

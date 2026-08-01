@@ -59,12 +59,12 @@ pub fn macro_parse(s: &str) -> Result<Macro, String> {
                 if c.is_ascii() && (c as u32) < 128 {
                     let c_str = c.to_string();
                     for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
-                        if ent.name.filter(|&n| n == c_str).is_some() {
+                        if ent.name.as_ref().is_some_and(|&n| n == c_str) {
                             add_entry(&mut macro_obj, MacroEntryType::KeySequence, i as u16)?;
                             found = true;
                             break;
                         }
-                        if ent.shifted_name.filter(|&s| s == c_str).is_some() {
+                        if ent.shifted_name.as_ref().is_some_and(|&s| s == c_str) {
                             add_entry(&mut macro_obj, MacroEntryType::KeySequence, ((MOD_SHIFT as u16) << 8) | (i as u16))?;
                             found = true;
                             break;
