@@ -3,7 +3,7 @@ use crate::keyboard_types::*;
 
 impl Keyboard {
     pub(super) fn resolve_descriptor(&self, code: u8) -> (Descriptor, i32) {
-        if code >= crate::keys::KEYD_CHORD_1 && code <= crate::keys::KEYD_CHORD_MAX {
+        if (crate::keys::KEYD_CHORD_1..=crate::keys::KEYD_CHORD_MAX).contains(&code) {
             let slot = (code - crate::keys::KEYD_CHORD_1) as usize;
             if slot < self.active_chords.len() && self.active_chords[slot].active != 0 {
                 return (self.active_chords[slot].chord.d, self.active_chords[slot].layer);
@@ -95,12 +95,18 @@ impl Keyboard {
                     return;
                 }
                 let (d, layer) = self.resolve_descriptor(code);
-                self.cache_set(code, Some(CacheEntry { code, d, dl: layer, layer: 0 }));
+                let cached = self.cache_set(code, Some(CacheEntry { code, d, dl: layer, layer: 0 }));
+                debug_assert!(
+                    cached,
+                    "cache table full ({CACHE_SIZE} slots) inserting code {code}; \
+                     its key-up will be silently dropped"
+                );
                 self.execute_descriptor(output, d, code, layer, pressed, time);
             } else if let Some(entry) = self.cache_get(code) {
                 let d = entry.d;
                 let dl = entry.dl;
-                self.cache_set(code, None);
+                let cleared = self.cache_set(code, None);
+                debug_assert!(cleared, "cache_set(None) failed to clear code {code} we just found via cache_get");
                 self.execute_descriptor(output, d, code, dl, pressed, time);
             }
         }

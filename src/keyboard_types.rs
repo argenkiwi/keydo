@@ -49,6 +49,23 @@ pub const CHORD_QUEUE_LEN: usize = 32;
 /// etc.) occupy immediately afterward.
 pub const MAX_ACTIVE_CHORDS: usize = (KEYD_CHORD_MAX - KEYD_CHORD_1 + 1) as usize;
 
+// Defense-in-depth: if this constant is ever hand-edited back to a hardcoded
+// value instead of derived from the reserved keycode range, fail the build
+// rather than silently letting a chord slot alias a real Linux KEY_* code
+// (the exact bug fixed in commit 839456f — a runtime property test cannot
+// catch this class, since the bug is "the build itself is wrong," not a
+// behavior reachable by any input to a correctly-built binary).
+const _: () = assert!(MAX_ACTIVE_CHORDS <= (KEYD_CHORD_MAX - KEYD_CHORD_1 + 1) as usize);
+
+/// Simultaneously-held physical keys the cache can track at once (one slot
+/// per key so its key-up can replay the same descriptor it was pressed with).
+/// Arbitrary but generous headroom above any real keyboard's rollover.
+pub const CACHE_SIZE: usize = 16;
+
+/// Pending scheduled timeouts (overload/oneshot/macro deadlines) the daemon
+/// can track at once. Arbitrary but generous headroom above realistic usage.
+pub const TIMEOUT_TABLE_SIZE: usize = 128;
+
 pub struct ChordState {
     pub queue: [KeyEvent; CHORD_QUEUE_LEN],
     pub queue_sz: usize,
@@ -119,7 +136,7 @@ pub struct ScrollState {
 /// output via the [`Output`] trait.
 pub struct Keyboard {
     pub config: Config,
-    pub cache: [Option<CacheEntry>; 16],
+    pub cache: [Option<CacheEntry>; CACHE_SIZE],
     pub last_pressed_output_code: u8,
     pub last_pressed_code: u8,
     pub oneshot_latch: u8,
@@ -129,7 +146,7 @@ pub struct Keyboard {
     pub oneshot_timeout: i64,
     pub overload_start_time: i64,
     pub last_simple_key_time: i64,
-    pub timeouts: [i64; 128],
+    pub timeouts: [i64; TIMEOUT_TABLE_SIZE],
     pub nr_timeouts: usize,
     pub active_chords: [ActiveChord; MAX_ACTIVE_CHORDS],
     /// Whether any layer defines a chord at all. When false the chord state

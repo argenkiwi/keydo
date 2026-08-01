@@ -64,13 +64,13 @@ fn manage_device(keyboards: &[Keyboard], device: &mut Device) -> Option<usize> {
     }
     if best_idx.is_some() {
         if device.grab().is_err() {
-            eprintln!("WARNING: Failed to grab {}", device.path);
+            log::warn!("Failed to grab {}", device.path);
             return None;
         }
-        eprintln!("DEVICE: match    {}  ({})", device.id, device.name);
+        log::info!("DEVICE: match    {}  ({})", device.id, device.name);
     } else {
         let _ = device.ungrab();
-        eprintln!("DEVICE: ignoring {}  ({})", device.id, device.name);
+        log::info!("DEVICE: ignoring {}  ({})", device.id, device.name);
     }
     best_idx
 }
@@ -168,7 +168,7 @@ impl Daemon {
         let vkbd = Vkbd::init("keyd virtual keyboard")?;
         let ipc_server = IpcServer::create().ok();
         if ipc_server.is_none() {
-            eprintln!("WARNING: IPC server unavailable (another daemon running, or permissions issue)");
+            log::warn!("IPC server unavailable (another daemon running, or permissions issue)");
         }
         Ok(Daemon {
             output: OutputState { vkbd, keystate: [0; 256], listeners: Vec::new() },
@@ -203,7 +203,7 @@ impl Daemon {
                 if let Some(p) = path.to_str() {
                     match config_parse(p) {
                         Ok(cfg) => { self.keyboards.push(Keyboard::new(cfg)); n += 1; }
-                        Err(e)  => eprintln!("WARNING: {p}: {e}"),
+                        Err(e)  => log::warn!("{p}: {e}"),
                     }
                 }
             }
@@ -250,7 +250,7 @@ impl Daemon {
                 if let Some(p) = path.to_str().filter(|_| is_conf) {
                     match config_parse(p) {
                         Ok(cfg) => self.keyboards.push(Keyboard::new(cfg)),
-                        Err(e)  => eprintln!("WARNING: {p}: {e}"),
+                        Err(e)  => log::warn!("{p}: {e}"),
                     }
                 }
             }
@@ -337,7 +337,7 @@ impl Daemon {
             .collect();
 
         if self.devices.is_empty() {
-            eprintln!("WARNING: No input devices found at startup (waiting for hot-plug).");
+            log::warn!("No input devices found at startup (waiting for hot-plug).");
         }
 
         #[cfg(unix)]
@@ -358,11 +358,11 @@ impl Daemon {
             let sp = libc::sched_param { sched_priority: REALTIME_SCHED_PRIORITY };
             // SAFETY: pid 0 means current process; SCHED_FIFO with priority 49 is a valid real-time policy.
             if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &sp) } != 0 {
-                eprintln!("WARNING: sched_setscheduler: {}", std::io::Error::last_os_error());
+                log::warn!("sched_setscheduler: {}", std::io::Error::last_os_error());
             }
             // SAFETY: MCL_CURRENT | MCL_FUTURE are valid mlockall flags with no memory-safety requirements.
             if unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) } != 0 {
-                eprintln!("WARNING: mlockall: {}", std::io::Error::last_os_error());
+                log::warn!("mlockall: {}", std::io::Error::last_os_error());
             }
         }
 
@@ -439,7 +439,7 @@ impl Daemon {
             if poll_ret < 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() != std::io::ErrorKind::Interrupted {
-                    eprintln!("ERROR: poll failed: {err}");
+                    log::error!("poll failed: {err}");
                 }
                 continue;
             }
@@ -472,7 +472,7 @@ impl Daemon {
                     };
                     match devev.event_type {
                         DeviceEventType::Removed => {
-                            eprintln!("DEVICE: removed {}", self.devices[i].path);
+                            log::info!("DEVICE: removed {}", self.devices[i].path);
                             self.devices[i].fd = -1;
                             break;
                         }
@@ -539,7 +539,7 @@ impl Daemon {
                                 let path = format!("/dev/input/{name_str}");
                                 if let Ok(mut dev) = Device::init(&path) {
                                     let kbd_idx = manage_device(&self.keyboards, &mut dev);
-                                    eprintln!("DEVICE: hot-plugged {}", path);
+                                    log::info!("DEVICE: hot-plugged {}", path);
                                     self.devices.push(dev);
                                     self.device_kbd.push(kbd_idx);
                                     pfds_dirty = true;

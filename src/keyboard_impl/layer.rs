@@ -24,6 +24,11 @@ impl Keyboard {
     }
 
     pub(super) fn activate_layer<O: Output>(&mut self, output: &mut O, code: u8, idx: usize, time: i64) {
+        log::trace!(
+            "layer activate: '{}' (idx {idx}), held by code {code}, active count now {}",
+            self.config.layers[idx].name,
+            self.layer_state[idx].active + 1
+        );
         self.layer_state[idx].activation_time = time;
         self.layer_state[idx].active += 1;
         // Stamp the key holding this layer active — Op::Swap looks the holder up
@@ -36,6 +41,11 @@ impl Keyboard {
 
     pub(super) fn deactivate_layer<O: Output>(&mut self, output: &mut O, idx: usize) {
         debug_assert!(self.layer_state[idx].active > 0, "deactivate_layer called on inactive layer {idx}");
+        log::trace!(
+            "layer deactivate: '{}' (idx {idx}), active count now {}",
+            self.config.layers[idx].name,
+            self.layer_state[idx].active.saturating_sub(1)
+        );
         if self.layer_state[idx].active > 0 {
             self.layer_state[idx].active -= 1;
         }

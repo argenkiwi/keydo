@@ -190,7 +190,7 @@ fn check_descriptor_index_bounds(config: &Config, out: &mut Vec<ValidationError>
         }
     };
 
-    for (_li, layer) in config.layers.iter().enumerate() {
+    for layer in &config.layers {
         for (ki, d) in layer.keymap.iter().enumerate() {
             if d.op != Op::KeySequence || !matches!(d.data, DescriptorData::None) {
                 let ctx = format!("layer '{}' key {ki}", layer.name);

@@ -9,21 +9,19 @@ use crate::error::KeydoError;
 pub fn get_socket_path() -> String {
     #[cfg(unix)]
     {
-        if std::path::Path::new("/run/keydo").is_dir() {
-            "/run/keydo/socket".to_string()
-        } else if std::path::Path::new("/run/keydo/socket").exists() {
+        if std::path::Path::new("/run/keydo").is_dir()
+            || std::path::Path::new("/run/keydo/socket").exists()
+        {
             "/run/keydo/socket".to_string()
         } else {
             // SAFETY: getuid() is a standard system call that always succeeds.
             let uid = unsafe { libc::getuid() };
             if uid == 0 {
                 "/run/keydo/socket".to_string()
+            } else if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                format!("{runtime_dir}/keydo.socket")
             } else {
-                if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-                    format!("{}/keydo.socket", runtime_dir)
-                } else {
-                    format!("/tmp/keydo-{}.socket", uid)
-                }
+                format!("/tmp/keydo-{uid}.socket")
             }
         }
     }

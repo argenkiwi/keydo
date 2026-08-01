@@ -16,11 +16,17 @@ mod timeout_handler;
 impl Keyboard {
     /// Create a new keyboard instance from a parsed config.
     pub fn new(config: Config) -> Self {
+        debug_assert!(
+            config.layers.len() <= MAX_LAYERS,
+            "config has {} layers but layer_state is fixed at {MAX_LAYERS} — \
+             did you bypass config_parse's validate()?",
+            config.layers.len()
+        );
         let has_chords = config.layers.iter().any(|l| l.nr_chords > 0);
         Self {
             config,
             has_chords,
-            cache: [None; 16],
+            cache: [None; CACHE_SIZE],
             last_pressed_output_code: 0,
             last_pressed_code: 0,
             oneshot_latch: 0,
@@ -38,7 +44,7 @@ impl Keyboard {
             oneshot_timeout: 0,
             overload_start_time: 0,
             last_simple_key_time: 0,
-            timeouts: [0; 128],
+            timeouts: [0; TIMEOUT_TABLE_SIZE],
             nr_timeouts: 0,
             active_chords: {
                 const E: ActiveChord = ActiveChord {

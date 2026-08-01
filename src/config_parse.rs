@@ -87,10 +87,10 @@ pub fn parse_fn(s: &str) -> Option<(String, Vec<String>)> {
             }
         }
     }
-    if !current_arg.trim().is_empty() || args_str.trim().is_empty() && args.is_empty() {
-         if !args_str.trim().is_empty() {
-            args.push(current_arg.trim().to_string());
-         }
+    if (!current_arg.trim().is_empty() || (args_str.trim().is_empty() && args.is_empty()))
+        && !args_str.trim().is_empty()
+    {
+        args.push(current_arg.trim().to_string());
     }
 
     Some((name, args))

@@ -53,9 +53,15 @@ impl Keyboard {
     pub(super) fn enqueue_chord_event(&mut self, code: u8, pressed: u8, time: i64) {
         if code == 0 { return; }
         let sz = self.chord.queue_sz;
+        debug_assert!(
+            sz < self.chord.queue.len(),
+            "chord queue full ({CHORD_QUEUE_LEN} slots) enqueuing code {code}"
+        );
         if sz < self.chord.queue.len() {
             self.chord.queue[sz] = KeyEvent { code, pressed, timestamp: time as i32 };
             self.chord.queue_sz += 1;
+        } else {
+            log::trace!("chord queue full ({CHORD_QUEUE_LEN} slots): dropping code {code}");
         }
     }
 
@@ -80,9 +86,17 @@ impl Keyboard {
                 }
             }
             if chord_code != 0 {
+                log::trace!("chord resolve: matched layer {match_layer} chord {ci} -> synthetic code {chord_code}");
                 queue_offset = chord.sz;
                 self.process_event(output, chord_code, 1, last_time);
+            } else {
+                log::trace!(
+                    "chord resolve: matched layer {match_layer} chord {ci} but no free active_chords \
+                     slot ({MAX_ACTIVE_CHORDS} in use) — falling back to raw passthrough"
+                );
             }
+        } else {
+            log::trace!("chord resolve: no match, flushing {queue_sz} queued event(s) as raw passthrough");
         }
 
         // Snapshot onto the stack: kbd_process_events needs &mut self, and the
@@ -103,6 +117,7 @@ impl Keyboard {
     }
 
     pub(super) fn abort_chord<O: Output>(&mut self, output: &mut O) -> bool {
+        log::trace!("chord abort: discarding match, flushing queue as raw passthrough");
         self.chord.match_idx = None;
         self.resolve_chord(output)
     }

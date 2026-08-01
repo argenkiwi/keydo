@@ -37,6 +37,7 @@ missing-panics-doc = "allow"
 doc-markdown = "allow"
 too-many-lines = "allow"
 elidable-lifetime-names = "allow"
+unreadable-literal = "allow" # generated unicode codepoint table in unicode.rs
 # Wildcard imports are pervasive for internal prelude-like modules (config::*, keys::*)
 wildcard-imports = "allow"
 similar-names = "allow"
@@ -44,7 +45,7 @@ similar-names = "allow"
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 env_logger = "0.11.10"
-log = "0.4.32"
+log = { version = "0.4.32", features = ["release_max_level_info"] }
 thiserror = "2"
 
 [target.'cfg(unix)'.dependencies]
@@ -52,6 +53,9 @@ libc = "0.2.186"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify = "0.11.2"
+
+[dev-dependencies]
+proptest = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

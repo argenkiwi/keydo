@@ -18,9 +18,17 @@ impl Keyboard {
     }
 
     pub(super) fn schedule_timeout(&mut self, deadline_ms: i64) {
+        debug_assert!(
+            self.nr_timeouts < self.timeouts.len(),
+            "timeout table full ({TIMEOUT_TABLE_SIZE} slots) scheduling deadline {deadline_ms}; \
+             a pending timeout will be dropped, likely a stuck key/chord"
+        );
         if self.nr_timeouts < self.timeouts.len() {
+            log::trace!("timeout schedule: deadline {deadline_ms} ({} pending)", self.nr_timeouts + 1);
             self.timeouts[self.nr_timeouts] = deadline_ms;
             self.nr_timeouts += 1;
+        } else {
+            log::trace!("timeout table full ({TIMEOUT_TABLE_SIZE} slots): dropping deadline {deadline_ms}");
         }
     }
 }

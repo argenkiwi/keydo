@@ -11,9 +11,10 @@ pub enum KeydoError {
     },
 
     /// A syntax or semantic error while parsing a config file.
-    /// `file` and `line` are optional context; Display shows only `msg` so
-    /// callers that already print the path don't double-print it.
-    #[error("{msg}")]
+    /// `file` is unused today (`ParseCtx::current_file` is never populated —
+    /// callers already print the path themselves), so Display shows only the
+    /// line number and message.
+    #[error("line {line}: {msg}")]
     ConfigSyntax { file: String, line: usize, msg: String },
 
     /// A semantic validation error caught after parsing succeeds.
@@ -40,5 +41,20 @@ pub enum KeydoError {
 impl From<String> for KeydoError {
     fn from(s: String) -> Self {
         KeydoError::Other(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_syntax_display_includes_line_number() {
+        let err = KeydoError::ConfigSyntax {
+            file: String::new(),
+            line: 42,
+            msg: "unexpected token".to_string(),
+        };
+        assert_eq!(err.to_string(), "line 42: unexpected token");
     }
 }

@@ -798,6 +798,22 @@ mod tests {
         assert_eq!(total_chords, 0, "bind added a chord; has_chords is now stale");
     }
 
+    #[test]
+    #[should_panic(expected = "layer_state is fixed at")]
+    fn keyboard_new_rejects_config_with_more_layers_than_layer_state_can_hold() {
+        // config_parse_string (used by every test and any future fuzz harness)
+        // never calls config_validate::validate() — only the file-loading
+        // config_parse does. So a hand-built or otherwise-unvalidated Config
+        // with too many layers can reach Keyboard::new directly; this must
+        // panic loudly in debug builds rather than silently indexing
+        // layer_state out of bounds later.
+        let mut config = Config::new();
+        for i in 0..=MAX_LAYERS {
+            config.layers.push(Layer::new(format!("layer_{i}")));
+        }
+        Keyboard::new(config);
+    }
+
     // ── Throughput harness ───────────────────────────────────────────────────
     //
     // Not a correctness test — a repeatable before/after number for changes to
@@ -855,5 +871,167 @@ mod tests {
 
         // Guard against the harness silently measuring nothing.
         assert!(output.keys > 0, "harness produced no output");
+    }
+}
+
+// ── Property-based fuzzing ───────────────────────────────────────────────────
+//
+// Replaces the ad-hoc, throwaway fuzzer (never committed — see notes/
+// 20260713215804.md) that originally found the swap-cache-hijack and
+// chord-slot-aliasing bugs. Each config below reproduces the *shape* of one
+// historical bug or a currently-unguarded capacity edge; the invariants
+// checked after every run are the same ones the workstream-B debug_asserts
+// enforce, so a regression in either the asserts or the state machine itself
+// shows up here as a shrinking, reproducible failure instead of a silent
+// drop.
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use crate::keys::*;
+    use proptest::prelude::*;
+
+    /// A bounded sequence of key events over a small alphabet, with
+    /// monotonically increasing timestamps (real device events never go
+    /// backwards in time).
+    fn key_event_seq(codes: Vec<u8>, max_len: usize) -> impl Strategy<Value = Vec<KeyEvent>> {
+        prop::collection::vec(
+            (proptest::sample::select(codes), any::<bool>(), 1i32..50i32),
+            0..max_len,
+        )
+        .prop_map(|steps| {
+            let mut ts = 0i32;
+            steps
+                .into_iter()
+                .map(|(code, pressed, dt)| {
+                    ts += dt;
+                    KeyEvent { code, pressed: u8::from(pressed), timestamp: ts }
+                })
+                .collect()
+        })
+    }
+
+    /// Checks the same capacity/uniqueness invariants the workstream-B
+    /// debug_asserts enforce at the write sites, as a second line of defense
+    /// that also gives proptest a clean value to shrink against (rather than
+    /// relying solely on a panic partway through processing).
+    fn assert_capacity_invariants(kbd: &Keyboard) {
+        let mut seen = std::collections::HashSet::new();
+        for entry in kbd.cache.iter().flatten() {
+            assert!(seen.insert(entry.code), "duplicate code {} aliased in cache", entry.code);
+        }
+        assert!(
+            kbd.chord.queue_sz <= CHORD_QUEUE_LEN,
+            "chord queue_sz {} exceeded its {CHORD_QUEUE_LEN}-slot bound",
+            kbd.chord.queue_sz
+        );
+        assert!(
+            kbd.nr_timeouts <= TIMEOUT_TABLE_SIZE,
+            "nr_timeouts {} exceeded its {TIMEOUT_TABLE_SIZE}-slot bound",
+            kbd.nr_timeouts
+        );
+    }
+
+    /// Builds a config with `MAX_LAYERS - 1` non-main layers, each toggled by
+    /// a distinct key on `main`, plus the codes of those trigger keys.
+    fn many_layers_config() -> (String, Vec<u8>) {
+        const ALPHABET: [(&str, u8); 36] = [
+            ("q", KEYD_Q), ("w", KEYD_W), ("e", KEYD_E), ("r", KEYD_R), ("t", KEYD_T),
+            ("y", KEYD_Y), ("u", KEYD_U), ("i", KEYD_I), ("o", KEYD_O), ("p", KEYD_P),
+            ("a", KEYD_A), ("s", KEYD_S), ("d", KEYD_D), ("f", KEYD_F), ("g", KEYD_G),
+            ("h", KEYD_H), ("j", KEYD_J), ("k", KEYD_K), ("l", KEYD_L), ("z", KEYD_Z),
+            ("x", KEYD_X), ("c", KEYD_C), ("v", KEYD_V), ("b", KEYD_B), ("n", KEYD_N),
+            ("m", KEYD_M), ("1", KEYD_1), ("2", KEYD_2), ("3", KEYD_3), ("4", KEYD_4),
+            ("5", KEYD_5), ("6", KEYD_6), ("7", KEYD_7), ("8", KEYD_8), ("9", KEYD_9),
+            ("0", KEYD_0),
+        ];
+        // config_parse_string always adds 6 built-in layers on top of the
+        // user-declared ones: main plus 5 modifier-tracking layers (control,
+        // shift, alt, meta, altgr) — see config_impl.rs's config_parse_string.
+        let n = MAX_LAYERS - 6;
+        let mut main = String::from("[ids]\n*\n\n[main]\n");
+        let mut layers = String::new();
+        let mut codes = Vec::new();
+        for &(name, code) in &ALPHABET[..n] {
+            main.push_str(&format!("{name} = layer(layer_{name})\n"));
+            layers.push_str(&format!("[layer_{name}]\nesc = esc\n\n"));
+            codes.push(code);
+        }
+        (format!("{main}\n{layers}"), codes)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+        /// Fuzzes the chord queue/resolve/abort state machine with the same
+        /// shape of alphabet as the historical chord-slot-aliasing bug (4+
+        /// potential simultaneous chords plus a real hardware key, playcd,
+        /// immediately past the reserved chord range) — but note this checks
+        /// only capacity/uniqueness invariants, not output semantics, so it
+        /// cannot by itself catch that specific bug (a wrong output, not a
+        /// panic or capacity violation). That bug class — MAX_ACTIVE_CHORDS
+        /// hand-edited back to a value larger than the reserved keycode
+        /// range — is instead guarded by the `const _: () = assert!(...)` in
+        /// keyboard_types.rs, which fails the *build* outright; a runtime
+        /// property test cannot catch "the build itself is wrong." This test
+        /// still earns its keep by fuzzing the chord queue/state transitions
+        /// themselves for other, not-yet-known bugs in a correctly-built
+        /// binary.
+        #[test]
+        fn chord_config_never_panics(events in key_event_seq(
+            vec![KEYD_J, KEYD_K, KEYD_H, KEYD_L, KEYD_U, KEYD_I, KEYD_O, KEYD_P, KEYD_PLAYCD],
+            40,
+        )) {
+            let mut cfg = Config::new();
+            config_parse_string(&mut cfg,
+                "[ids]\n*\n\n[main]\nj+k = a\nh+l = b\nu+i = c\no+p = d\nplaycd = z\n"
+            ).unwrap();
+            let mut kbd = Keyboard::new(cfg);
+            let mut output = TestOutput::new();
+            kbd.kbd_process_events(&mut output, &events);
+            assert_capacity_invariants(&kbd);
+        }
+
+        /// Mirrors the historical swap-cache-hijack bug: overloads that swap
+        /// a modifier in on an `extend` layer.
+        #[test]
+        fn swap_overload_config_never_panics(events in key_event_seq(
+            vec![KEYD_S, KEYD_SPACE, KEYD_K, KEYD_E],
+            40,
+        )) {
+            let mut cfg = Config::new();
+            config_parse_string(&mut cfg,
+                "[ids]\n*\n\n\
+                 [main]\n\
+                 s = overloadi(s, timeout(overloadt2(alt, s, 200), 500, s), 150)\n\
+                 space = overloadi(space, timeout(overloadt2(extend, space, 200), 500, space), 150)\n\
+                 k = overloadi(k, timeout(overloadt2(shift, k, 200), 500, k), 150)\n\n\
+                 [extend]\n\
+                 e = swap(shift)\n"
+            ).unwrap();
+            let mut kbd = Keyboard::new(cfg);
+            let mut output = TestOutput::new();
+            kbd.kbd_process_events(&mut output, &events);
+            assert_capacity_invariants(&kbd);
+        }
+
+        /// Layer count at MAX_LAYERS - 1 (the largest a valid config can
+        /// declare), exercising layer activate/deactivate under random input.
+        /// Only a handful of the config's trigger keys are used for the event
+        /// alphabet (well under CACHE_SIZE) so this stays targeted at the
+        /// layer-count boundary rather than re-triggering the separate,
+        /// already-known cache-capacity edge (holding 17+ distinct keys at
+        /// once — that's a real but unrelated capacity limit, guarded by the
+        /// cache_set debug_assert in dispatch.rs, not something this test
+        /// is meant to exercise).
+        #[test]
+        fn many_layers_config_never_panics(events in key_event_seq(many_layers_config().1[..8].to_vec(), 60)) {
+            let (config_text, _) = many_layers_config();
+            let mut cfg = Config::new();
+            config_parse_string(&mut cfg, &config_text).unwrap();
+            let mut kbd = Keyboard::new(cfg);
+            let mut output = TestOutput::new();
+            kbd.kbd_process_events(&mut output, &events);
+            assert_capacity_invariants(&kbd);
+        }
     }
 }

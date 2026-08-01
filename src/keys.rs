@@ -574,7 +574,8 @@ pub fn parse_modset(s: &str) -> Option<u8> {
         if part.len() != 1 {
             return None;
         }
-        match part.chars().next().unwrap() {
+        let c = part.chars().next()?;
+        match c {
             'C' => mods |= MOD_CTRL,
             'M' => mods |= MOD_SUPER,
             'A' => mods |= MOD_ALT,

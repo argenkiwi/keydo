@@ -27,6 +27,10 @@ impl Keyboard {
         // Enqueue real (non-synthetic) events.
         if code != 0 {
             if let Some(po) = self.pending_overload.as_mut() {
+                debug_assert!(
+                    po.queue_sz < po.queue.len(),
+                    "pending_overload queue full ({CHORD_QUEUE_LEN} slots) enqueuing code {code}"
+                );
                 if po.queue_sz < po.queue.len() {
                     po.queue[po.queue_sz] = KeyEvent { code, pressed, timestamp: time as i32 };
                     po.queue_sz += 1;
@@ -61,9 +65,14 @@ impl Keyboard {
 
             self.pending_overload = None;
 
-            self.cache_set(overload_code, Some(CacheEntry {
+            let cached = self.cache_set(overload_code, Some(CacheEntry {
                 code: overload_code, d: action, dl, layer: 0,
             }));
+            debug_assert!(
+                cached,
+                "cache table full ({CACHE_SIZE} slots) inserting overload code {overload_code}; \
+                 its key-up will be silently dropped"
+            );
             self.execute_descriptor(output, action, overload_code, dl, 1, time);
 
             if queue_sz > 0 {

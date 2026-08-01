@@ -304,9 +304,9 @@ mod macos_vkbd {
                 loop {
                     // Wait until a key is armed.
                     let (rev, key) = {
-                        let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         while !st.repeat.armed {
-                            st = cvar.wait(st).unwrap_or_else(|e| e.into_inner());
+                            st = cvar.wait(st).unwrap_or_else(std::sync::PoisonError::into_inner);
                         }
                         (st.repeat.revision, st.repeat.key)
                     };
@@ -315,7 +315,7 @@ mod macos_vkbd {
 
                     // Fire repeats at the system interval until cancelled.
                     loop {
-                        let st = lock.lock().unwrap_or_else(|e| e.into_inner());
+                        let st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         if st.repeat.revision != rev {
                             break;
                         }
@@ -344,7 +344,7 @@ mod macos_vkbd {
 
             let (lock, cvar) = &*self.shared;
             {
-                let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if (cgkey as usize) < 128 {
                     st.key_states[cgkey as usize] = state;
                 }
@@ -368,7 +368,7 @@ mod macos_vkbd {
 
             // Arm or cancel the software repeat timer for non-modifier keys.
             if !macos_input::is_modifier_cgkey(cgkey) {
-                let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if state != 0 {
                     st.repeat.key       = cgkey;
                     st.repeat.armed     = true;
