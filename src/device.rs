@@ -35,6 +35,22 @@ pub struct DeviceEvent {
     pub y: i32,
 }
 
+/// Outcome of one [`Device::read_event`] call.
+///
+/// `Ignored` and `Idle` are deliberately distinct: a raw event that maps to no
+/// [`DeviceEvent`] (key auto-repeat, `REL_X`/`REL_Y` accumulation, an unmapped
+/// keycode) means there may well be more data waiting, so callers must keep
+/// draining. Collapsing both into `None` costs a full `poll()` round trip per
+/// ignored event.
+pub enum ReadResult {
+    /// An event the caller should dispatch.
+    Event(DeviceEvent),
+    /// A raw event was consumed but produced nothing; keep draining.
+    Ignored,
+    /// Nothing left to read; stop draining and wait for readiness.
+    Idle,
+}
+
 pub struct Device {
     pub fd: RawFd,
     pub grabbed: bool,
@@ -418,7 +434,7 @@ impl Device {
         }
     }
 
-    pub fn read_event(&mut self) -> Option<DeviceEvent> {
+    pub fn read_event(&mut self) -> ReadResult {
         // SAFETY: input_event is #[repr(C)] with integer fields valid when zero-initialized.
         let mut ev: input_event = unsafe { std::mem::zeroed() };
         let sz = std::mem::size_of::<input_event>();
@@ -430,30 +446,33 @@ impl Device {
         if r < 0 {
             // SAFETY: __errno_location returns a valid pointer to the thread-local errno on Linux.
             if unsafe { *libc::__errno_location() } == libc::EAGAIN {
-                return None;
+                return ReadResult::Idle;
             }
             // Device removed.
             self.fd = -1;
-            return Some(DeviceEvent { event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0 });
+            return ReadResult::Event(DeviceEvent { event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0 });
         }
 
         match ev.type_ {
             EV_KEY => {
-                if ev.value == 2 { return None; } // ignore key-repeat
+                if ev.value == 2 { return ReadResult::Ignored; } // ignore key-repeat
                 let code = if ev.code >= 256 {
-                    map_extended_key(ev.code)?
+                    match map_extended_key(ev.code) {
+                        Some(c) => c,
+                        None => return ReadResult::Ignored,
+                    }
                 } else {
                     ev.code as u8
                 };
-                Some(DeviceEvent { event_type: DeviceEventType::Key, code, pressed: ev.value as u8, x: 0, y: 0 })
+                ReadResult::Event(DeviceEvent { event_type: DeviceEventType::Key, code, pressed: ev.value as u8, x: 0, y: 0 })
             }
             EV_REL => {
                 match ev.code {
-                    REL_WHEEL  => Some(DeviceEvent { event_type: DeviceEventType::MouseScroll, code: 0, pressed: 0, x: 0, y: ev.value }),
-                    REL_HWHEEL => Some(DeviceEvent { event_type: DeviceEventType::MouseScroll, code: 0, pressed: 0, x: ev.value, y: 0 }),
-                    REL_X => { self.pending_rel_x += ev.value; None }
-                    REL_Y => { self.pending_rel_y += ev.value; None }
-                    _ => None,
+                    REL_WHEEL  => ReadResult::Event(DeviceEvent { event_type: DeviceEventType::MouseScroll, code: 0, pressed: 0, x: 0, y: ev.value }),
+                    REL_HWHEEL => ReadResult::Event(DeviceEvent { event_type: DeviceEventType::MouseScroll, code: 0, pressed: 0, x: ev.value, y: 0 }),
+                    REL_X => { self.pending_rel_x += ev.value; ReadResult::Ignored }
+                    REL_Y => { self.pending_rel_y += ev.value; ReadResult::Ignored }
+                    _ => ReadResult::Ignored,
                 }
             }
             EV_SYN => {
@@ -462,28 +481,28 @@ impl Device {
                     let y = self.pending_rel_y;
                     self.pending_rel_x = 0;
                     self.pending_rel_y = 0;
-                    Some(DeviceEvent { event_type: DeviceEventType::MouseMove, code: 0, pressed: 0, x, y })
+                    ReadResult::Event(DeviceEvent { event_type: DeviceEventType::MouseMove, code: 0, pressed: 0, x, y })
                 } else {
-                    None
+                    ReadResult::Ignored
                 }
             }
             EV_ABS => {
                 match ev.code {
                     ABS_X => {
                         let w = self.maxx.saturating_sub(self.minx).max(1);
-                        Some(DeviceEvent { event_type: DeviceEventType::MouseMoveAbs, code: 0, pressed: 0,
+                        ReadResult::Event(DeviceEvent { event_type: DeviceEventType::MouseMoveAbs, code: 0, pressed: 0,
                                            x: ((ev.value as u32).wrapping_sub(self.minx) * 1024 / w) as i32, y: 0 })
                     }
                     ABS_Y => {
                         let h = self.maxy.saturating_sub(self.miny).max(1);
-                        Some(DeviceEvent { event_type: DeviceEventType::MouseMoveAbs, code: 0, pressed: 0,
+                        ReadResult::Event(DeviceEvent { event_type: DeviceEventType::MouseMoveAbs, code: 0, pressed: 0,
                                            x: 0, y: ((ev.value as u32).wrapping_sub(self.miny) * 1024 / h) as i32 })
                     }
-                    _ => None,
+                    _ => ReadResult::Ignored,
                 }
             }
-            EV_LED => Some(DeviceEvent { event_type: DeviceEventType::Led, code: ev.code as u8, pressed: ev.value as u8, x: 0, y: 0 }),
-            _ => None,
+            EV_LED => ReadResult::Event(DeviceEvent { event_type: DeviceEventType::Led, code: ev.code as u8, pressed: ev.value as u8, x: 0, y: 0 }),
+            _ => ReadResult::Ignored,
         }
     }
 }
@@ -527,17 +546,23 @@ impl Device {
 
     pub fn set_led(&self, _led: u8, _state: bool) {}
 
-    pub fn read_event(&mut self) -> Option<DeviceEvent> {
+    pub fn read_event(&mut self) -> ReadResult {
         match crate::macos_input::tap_read(self.fd) {
             crate::macos_input::TapReadResult::Ok(cgkey, pressed) => {
-                let code = crate::macos_input::cgkey_to_keyd_code(cgkey)?;
-                Some(DeviceEvent { event_type: DeviceEventType::Key, code, pressed, x: 0, y: 0 })
+                match crate::macos_input::cgkey_to_keyd_code(cgkey) {
+                    // The tap wrote a keycode we have no keyd mapping for; more
+                    // events may already be queued behind it.
+                    None => ReadResult::Ignored,
+                    Some(code) => ReadResult::Event(
+                        DeviceEvent { event_type: DeviceEventType::Key, code, pressed, x: 0, y: 0 },
+                    ),
+                }
             }
             crate::macos_input::TapReadResult::EOF => {
                 self.fd = -1;
-                Some(DeviceEvent { event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0 })
+                ReadResult::Event(DeviceEvent { event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0 })
             }
-            crate::macos_input::TapReadResult::None => None,
+            crate::macos_input::TapReadResult::None => ReadResult::Idle,
         }
     }
 }
@@ -590,16 +615,19 @@ impl Device {
 
     pub fn set_led(&self, _led: u8, _state: bool) {}
 
-    pub fn read_event(&mut self) -> Option<DeviceEvent> {
+    pub fn read_event(&mut self) -> ReadResult {
         use std::sync::mpsc::TryRecvError;
-        match self.rx.as_ref()?.try_recv() {
-            Ok((code, pressed)) => Some(DeviceEvent {
+        // The receiver is taken by the Windows event loop, which then owns the
+        // draining; without it this device has nothing to offer.
+        let Some(rx) = self.rx.as_ref() else { return ReadResult::Idle };
+        match rx.try_recv() {
+            Ok((code, pressed)) => ReadResult::Event(DeviceEvent {
                 event_type: DeviceEventType::Key, code, pressed, x: 0, y: 0,
             }),
-            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Empty) => ReadResult::Idle,
             Err(TryRecvError::Disconnected) => {
                 self.fd = -1;
-                Some(DeviceEvent {
+                ReadResult::Event(DeviceEvent {
                     event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0,
                 })
             }
@@ -616,7 +644,7 @@ impl Device {
     pub fn grab(&mut self) -> Result<(), String> { Err("Unsupported platform".to_string()) }
     pub fn ungrab(&mut self) -> Result<(), String> { Err("Unsupported platform".to_string()) }
     pub fn set_led(&self, _led: u8, _state: bool) {}
-    pub fn read_event(&mut self) -> Option<DeviceEvent> { None }
+    pub fn read_event(&mut self) -> ReadResult { ReadResult::Idle }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

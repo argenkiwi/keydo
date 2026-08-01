@@ -91,18 +91,23 @@ fn write_led_fd(fd: RawFd, led: u8, state: bool) {
 // ── Input text (for IPC_INPUT) ─────────────────────────────────────────────
 
 fn input_text(vkbd: &Vkbd, text: &str, delay_us: u32) {
+    // A table entry names this character iff it is exactly that one char —
+    // compared directly so the scan below doesn't allocate a String per char.
+    let names = |entry: Option<&'static str>, c: char| {
+        entry.is_some_and(|n| n.chars().eq(std::iter::once(c)))
+    };
+
     for c in text.chars() {
-        let s = c.to_string();
         let mut found = false;
 
         for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
-            if ent.name.is_some_and(|n| n == s) {
+            if names(ent.name, c) {
                 vkbd.send_key(i as u8, 1);
                 vkbd.send_key(i as u8, 0);
                 found = true;
                 break;
             }
-            if ent.shifted_name.is_some_and(|n| n == s) {
+            if names(ent.shifted_name, c) {
                 vkbd.send_key(KEYD_LEFTSHIFT, 1);
                 vkbd.send_key(i as u8, 1);
                 vkbd.send_key(i as u8, 0);
@@ -151,6 +156,10 @@ pub struct Daemon {
     pub device_kbd:  Vec<Option<usize>>,
     ipc_server: Option<IpcServer>,
     config_dir: String,
+    /// Scratch buffer for `dispatch_kbd`, reused across events so the hot path
+    /// stays allocation-free. Only ever populated on Linux with layer_indicator
+    /// enabled — see `DaemonOutput::on_layer_change`.
+    grabbed_fds: Vec<RawFd>,
 }
 
 impl Daemon {
@@ -168,6 +177,7 @@ impl Daemon {
             device_kbd: Vec::new(),
             ipc_server,
             config_dir: "/etc/keyd".to_string(),
+            grabbed_fds: Vec::new(),
         })
     }
 
@@ -202,20 +212,31 @@ impl Daemon {
     }
 
     fn dispatch_kbd(&mut self, kbd_idx: usize, events: &[KeyEvent]) -> i64 {
-        // Collect raw fds of grabbed, non-virtual physical devices for this keyboard
-        // (used by DaemonOutput::on_layer_change for the layer_indicator LED).
-        let grabbed_fds: Vec<RawFd> = self.devices.iter()
-            .zip(self.device_kbd.iter())
-            .filter(|(dev, ki)| **ki == Some(kbd_idx) && dev.grabbed && !dev.is_virtual)
-            .map(|(dev, _)| dev.fd)
-            .collect();
+        let Daemon { output: out, keyboards, devices, device_kbd, grabbed_fds, .. } = self;
 
-        let (keyboards, out) = (&mut self.keyboards, &mut self.output);
+        // Raw fds of grabbed, non-virtual physical devices for this keyboard,
+        // consumed by DaemonOutput::on_layer_change for the layer_indicator LED.
+        // That is the only reader, it is Linux-only, and it does nothing unless
+        // layer_indicator is set — so on every other path leave the buffer empty
+        // rather than refilling it once per key event.
+        grabbed_fds.clear();
+        #[cfg(target_os = "linux")]
+        if keyboards[kbd_idx].config.layer_indicator != 0 {
+            grabbed_fds.extend(
+                devices.iter()
+                    .zip(device_kbd.iter())
+                    .filter(|(dev, ki)| **ki == Some(kbd_idx) && dev.grabbed && !dev.is_virtual)
+                    .map(|(dev, _)| dev.fd),
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (&devices, &device_kbd);
+
         let mut adapter = DaemonOutput {
             vkbd:       &out.vkbd,
             keystate:   &mut out.keystate,
             listeners:  &mut out.listeners,
-            device_fds: &grabbed_fds,
+            device_fds: grabbed_fds,
         };
         keyboards[kbd_idx].kbd_process_events(&mut adapter, events)
     }
@@ -358,38 +379,53 @@ impl Daemon {
         let mut panic_state = PanicState::new();
         let mut timeout_ms: i64 = -1;
 
+        // The pollfd set only changes when a device is added or removed, so it
+        // is built once and reused. Rebuilding it per iteration would mean a
+        // heap allocation on every key event and every timeout tick.
+        let mut pfds: Vec<libc::pollfd> = Vec::new();
+        let mut pfds_dirty = true;
+        let mut dev_count = 0usize;
+        let mut ipc_pfd_idx: Option<usize> = None;
+        #[cfg(target_os = "linux")]
+        let mut devmon_pfd_idx: Option<usize> = None;
+        #[cfg(target_os = "linux")]
+        let mut vkbd_pfd_idx = 0usize;
+
         loop {
-            let dev_count = self.devices.len();
-            let ipc_fd = self.ipc_server.as_ref().map(IpcServer::as_raw_fd);
-
             // ── Build pollfd array ────────────────────────────────────────
-            let mut pfds: Vec<libc::pollfd> = self.devices.iter()
-                .map(|d| libc::pollfd { fd: d.fd, events: libc::POLLIN | libc::POLLERR, revents: 0 })
-                .collect();
+            if pfds_dirty {
+                pfds.clear();
+                pfds.extend(self.devices.iter().map(|d| libc::pollfd {
+                    fd: d.fd, events: libc::POLLIN | libc::POLLERR, revents: 0,
+                }));
+                dev_count = pfds.len();
 
-            let ipc_pfd_idx = ipc_fd.map(|fd| {
-                let idx = pfds.len();
-                pfds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
-                idx
-            });
-
-            #[cfg(target_os = "linux")]
-            let devmon_pfd_idx = {
-                use std::os::unix::io::AsRawFd;
-                devmon.as_ref().map(|ino| {
+                ipc_pfd_idx = self.ipc_server.as_ref().map(IpcServer::as_raw_fd).map(|fd| {
                     let idx = pfds.len();
-                    pfds.push(libc::pollfd { fd: ino.as_raw_fd(), events: libc::POLLIN, revents: 0 });
+                    pfds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
                     idx
-                })
-            };
+                });
 
-            // Virtual keyboard fd: receives EV_LED feedback from the OS.
-            #[cfg(target_os = "linux")]
-            let vkbd_pfd_idx = {
-                let idx = pfds.len();
-                pfds.push(libc::pollfd { fd: self.output.vkbd.keyboard_fd(), events: libc::POLLIN, revents: 0 });
-                idx
-            };
+                #[cfg(target_os = "linux")]
+                {
+                    use std::os::unix::io::AsRawFd;
+                    devmon_pfd_idx = devmon.as_ref().map(|ino| {
+                        let idx = pfds.len();
+                        pfds.push(libc::pollfd { fd: ino.as_raw_fd(), events: libc::POLLIN, revents: 0 });
+                        idx
+                    });
+
+                    // Virtual keyboard fd: receives EV_LED feedback from the OS.
+                    vkbd_pfd_idx = pfds.len();
+                    pfds.push(libc::pollfd { fd: self.output.vkbd.keyboard_fd(), events: libc::POLLIN, revents: 0 });
+                }
+
+                pfds_dirty = false;
+            }
+
+            for pfd in &mut pfds {
+                pfd.revents = 0;
+            }
 
             // ── Poll ──────────────────────────────────────────────────────
             let poll_timeout = if timeout_ms < 0 { -1i32 }
@@ -426,7 +462,14 @@ impl Daemon {
             for (i, pfd) in pfds.iter().enumerate().take(dev_count) {
                 if pfd.revents == 0 { continue; }
                 let kbd_idx = self.device_kbd[i];
-                while let Some(devev) = self.devices[i].read_event() {
+                loop {
+                    let devev = match self.devices[i].read_event() {
+                        ReadResult::Event(ev) => ev,
+                        // Raw event consumed but nothing to dispatch — more may
+                        // be queued, so keep draining rather than re-polling.
+                        ReadResult::Ignored => continue,
+                        ReadResult::Idle => break,
+                    };
                     match devev.event_type {
                         DeviceEventType::Removed => {
                             eprintln!("DEVICE: removed {}", self.devices[i].path);
@@ -462,6 +505,10 @@ impl Daemon {
                     .and_then(|s| s.accept().ok());
                 if let Some(conn) = conn_opt {
                     self.handle_client(conn);
+                    // A `reload` re-runs manage_device over every device, so
+                    // re-derive the pollfd set rather than reason about which
+                    // IPC commands can and cannot disturb it.
+                    pfds_dirty = true;
                 }
             }
 
@@ -495,6 +542,7 @@ impl Daemon {
                                     eprintln!("DEVICE: hot-plugged {}", path);
                                     self.devices.push(dev);
                                     self.device_kbd.push(kbd_idx);
+                                    pfds_dirty = true;
                                 }
                             }
                         }
@@ -511,8 +559,11 @@ impl Daemon {
                     j += 1;
                 }
             }
-            self.devices.truncate(j);
-            self.device_kbd.truncate(j);
+            if j != self.devices.len() {
+                self.devices.truncate(j);
+                self.device_kbd.truncate(j);
+                pfds_dirty = true;
+            }
         }
     }
 

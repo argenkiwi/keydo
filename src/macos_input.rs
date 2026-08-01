@@ -247,6 +247,27 @@ static CGKEY_TO_KEYD: [u8; 128] = [
     0,   // 0x7F
 ];
 
+/// Sentinel for "no CGKeyCode maps to this keyd code" in [`KEYD_TO_CGKEY`].
+const CGKEY_NONE: u16 = u16::MAX;
+
+/// Reverse of [`CGKEY_TO_KEYD`], built at compile time so the forward table
+/// stays the single source of truth. Lowest CGKeyCode wins, matching the
+/// `position()` scan this replaced.
+const fn build_keyd_to_cgkey() -> [u16; 256] {
+    let mut table = [CGKEY_NONE; 256];
+    let mut cgkey = 0usize;
+    while cgkey < CGKEY_TO_KEYD.len() {
+        let keyd = CGKEY_TO_KEYD[cgkey] as usize;
+        if keyd != 0 && table[keyd] == CGKEY_NONE {
+            table[keyd] = cgkey as u16;
+        }
+        cgkey += 1;
+    }
+    table
+}
+
+static KEYD_TO_CGKEY: [u16; 256] = build_keyd_to_cgkey();
+
 pub fn cgkey_to_keyd_code(cgkey: u16) -> Option<u8> {
     if cgkey >= 128 { return None; }
     let k = CGKEY_TO_KEYD[cgkey as usize];
@@ -254,10 +275,8 @@ pub fn cgkey_to_keyd_code(cgkey: u16) -> Option<u8> {
 }
 
 pub fn keyd_to_cgkey_code(keyd: u8) -> Option<u16> {
-    CGKEY_TO_KEYD
-        .iter()
-        .position(|&k| k == keyd && keyd != 0)
-        .map(|i| i as u16)
+    let cgkey = KEYD_TO_CGKEY[keyd as usize];
+    if cgkey == CGKEY_NONE { None } else { Some(cgkey) }
 }
 
 pub fn modifier_bit_for_cgkey(cgkey: u16) -> CGEventFlags {
@@ -271,14 +290,20 @@ pub fn modifier_bit_for_cgkey(cgkey: u16) -> CGEventFlags {
     }
 }
 
+/// CGKeyCode range covering every modifier key; the only codes for which
+/// [`modifier_bit_for_cgkey`] returns a non-zero flag.
+const MODIFIER_CGKEYS: std::ops::RangeInclusive<u16> = 0x36..=0x3E;
+
 pub fn is_modifier_cgkey(cgkey: u16) -> bool {
-    matches!(cgkey, 0x36..=0x3E)
+    MODIFIER_CGKEYS.contains(&cgkey)
 }
 
 pub fn active_modifier_flags(key_states: &[u8; 128]) -> CGEventFlags {
     let mut flags: CGEventFlags = 0;
-    for (i, &s) in key_states.iter().enumerate() {
-        if s != 0 { flags |= modifier_bit_for_cgkey(i as u16); }
+    for cgkey in MODIFIER_CGKEYS {
+        if key_states[cgkey as usize] != 0 {
+            flags |= modifier_bit_for_cgkey(cgkey);
+        }
     }
     flags
 }
@@ -660,5 +685,67 @@ pub fn post_key(cgkey: u16, pressed: bool, key_states: &[u8; 128]) {
         CGEventSetIntegerValueField(ev, FIELD_SOURCE_USERDATA, KEYD_MARKER);
         CGEventPost(CG_HID_EVENT_TAP, ev);
         CFRelease(ev as CFTypeRef);
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `keyd_to_cgkey_code` was a linear `position()` scan over CGKEY_TO_KEYD
+    /// before it became a precomputed reverse table. Pin the two to each other
+    /// so the table can never drift from the forward mapping.
+    #[test]
+    fn reverse_table_matches_linear_scan() {
+        for keyd in 0..=u8::MAX {
+            let expected = CGKEY_TO_KEYD
+                .iter()
+                .position(|&k| k == keyd && keyd != 0)
+                .map(|i| i as u16);
+            assert_eq!(keyd_to_cgkey_code(keyd), expected, "mismatch for keyd code {keyd}");
+        }
+    }
+
+    #[test]
+    fn keyd_code_zero_is_unmapped() {
+        assert_eq!(keyd_to_cgkey_code(0), None);
+    }
+
+    #[test]
+    fn cgkey_round_trips_through_both_tables() {
+        for cgkey in 0..128u16 {
+            if let Some(keyd) = cgkey_to_keyd_code(cgkey) {
+                let back = keyd_to_cgkey_code(keyd).expect("mapped keyd code must reverse");
+                assert_eq!(cgkey_to_keyd_code(back), Some(keyd), "cgkey {cgkey} lost its keyd code");
+            }
+        }
+    }
+
+    /// The narrowed `active_modifier_flags` loop must see exactly what the old
+    /// full 128-slot scan saw.
+    #[test]
+    fn modifier_flags_match_full_scan() {
+        for cgkey in 0..128usize {
+            let mut states = [0u8; 128];
+            states[cgkey] = 1;
+
+            let expected: CGEventFlags = states
+                .iter()
+                .enumerate()
+                .filter(|&(_, &s)| s != 0)
+                .map(|(i, _)| modifier_bit_for_cgkey(i as u16))
+                .fold(0, |acc, bit| acc | bit);
+
+            assert_eq!(active_modifier_flags(&states), expected, "mismatch for cgkey {cgkey}");
+        }
+    }
+
+    #[test]
+    fn every_modifier_cgkey_has_a_flag() {
+        for cgkey in MODIFIER_CGKEYS {
+            assert_ne!(modifier_bit_for_cgkey(cgkey), 0, "cgkey {cgkey} is in the modifier range but has no flag");
+        }
     }
 }

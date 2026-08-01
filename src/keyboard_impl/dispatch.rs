@@ -3,7 +3,7 @@ use crate::keyboard_types::*;
 
 impl Keyboard {
     pub(super) fn resolve_descriptor(&self, code: u8) -> (Descriptor, i32) {
-        if code >= crate::keys::KEYD_CHORD_1 {
+        if code >= crate::keys::KEYD_CHORD_1 && code <= crate::keys::KEYD_CHORD_MAX {
             let slot = (code - crate::keys::KEYD_CHORD_1) as usize;
             if slot < self.active_chords.len() && self.active_chords[slot].active != 0 {
                 return (self.active_chords[slot].chord.d, self.active_chords[slot].layer);
@@ -61,15 +61,18 @@ impl Keyboard {
         self.calculate_main_loop_timeout(time)
     }
 
-    pub(super) fn process_event<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) -> i64 {
+    /// Advance the state machine by one event. The caller is responsible for
+    /// recomputing the main-loop timeout afterwards — `kbd_process_events` does
+    /// so once per iteration, so doing it again here would be dead work.
+    pub(super) fn process_event<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) {
         if self.handle_chord(output, code, pressed, time) {
-            return self.calculate_main_loop_timeout(time);
+            return;
         }
 
         self.handle_pending_timeout(output, code, pressed, time);
 
         if self.handle_pending_overload(output, code, pressed, time) {
-            return self.calculate_main_loop_timeout(time);
+            return;
         }
 
         if self.oneshot_timeout != 0 && time >= self.oneshot_timeout {
@@ -89,7 +92,7 @@ impl Keyboard {
         if code != 0 {
             if pressed != 0 {
                 if self.cache_get(code).is_some() {
-                    return self.calculate_main_loop_timeout(time);
+                    return;
                 }
                 let (d, layer) = self.resolve_descriptor(code);
                 self.cache_set(code, Some(CacheEntry { code, d, dl: layer, layer: 0 }));
@@ -101,7 +104,5 @@ impl Keyboard {
                 self.execute_descriptor(output, d, code, dl, pressed, time);
             }
         }
-
-        self.calculate_main_loop_timeout(time)
     }
 }

@@ -35,4 +35,10 @@ impl Keyboard {
         }
         None
     }
+
+    /// Mutable handle on the cache entry holding `code`, for callers that need
+    /// to rewrite a held key's stored descriptor in place.
+    pub(super) fn cache_find_mut(&mut self, code: u8) -> Option<&mut CacheEntry> {
+        self.cache.iter_mut().flatten().find(|c| c.code == code)
+    }
 }
