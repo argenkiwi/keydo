@@ -296,6 +296,42 @@ mod tests {
         assert!(!codes.contains(&KEYD_ESC), "escape must not fire after interkey timeout");
     }
 
+    #[test]
+    fn test_fourth_simultaneous_chord_does_not_alias_real_keycode() {
+        // 4 disjoint chords exhaust the 3 real chord slots; the 4th must fall
+        // back to its raw keys, and a genuine playcd press afterward must
+        // resolve to its own binding rather than the failed 4th chord's slot.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nj+k = a\nh+l = b\nu+i = c\no+p = d\nplaycd = z\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_J, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_K, pressed: 1, timestamp: 10 },   // chord1 -> slot 0 (197)
+            KeyEvent { code: KEYD_H, pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_L, pressed: 1, timestamp: 30 },   // chord2 -> slot 1 (198)
+            KeyEvent { code: KEYD_U, pressed: 1, timestamp: 40 },
+            KeyEvent { code: KEYD_I, pressed: 1, timestamp: 50 },   // chord3 -> slot 2 (199), slots full
+            KeyEvent { code: KEYD_O, pressed: 1, timestamp: 60 },
+            KeyEvent { code: KEYD_P, pressed: 1, timestamp: 70 },   // chord4 match, no free slot -> raw passthrough
+            KeyEvent { code: KEYD_PLAYCD, pressed: 1, timestamp: 80 }, // real hardware playcd key
+            KeyEvent { code: KEYD_PLAYCD, pressed: 0, timestamp: 90 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+
+        assert!(codes.contains(&KEYD_A), "chord1 (j+k) should fire");
+        assert!(codes.contains(&KEYD_B), "chord2 (h+l) should fire");
+        assert!(codes.contains(&KEYD_C), "chord3 (u+i) should fire");
+        assert!(!codes.contains(&KEYD_D), "chord4 must not resolve once all chord slots are exhausted");
+        assert!(codes.contains(&KEYD_O), "o must fall back to its own binding when no chord slot is free");
+        assert!(codes.contains(&KEYD_P), "p must fall back to its own binding when no chord slot is free");
+        assert!(codes.contains(&KEYD_Z), "real playcd key must resolve to its own binding, not an aliased chord");
+    }
+
     // ── Phase 7: timeout ──────────────────────────────────────────────────────
 
     #[test]

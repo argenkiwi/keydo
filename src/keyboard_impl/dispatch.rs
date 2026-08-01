@@ -3,7 +3,7 @@ use crate::keyboard_types::*;
 
 impl Keyboard {
     pub(super) fn resolve_descriptor(&self, code: u8) -> (Descriptor, i32) {
-        if code >= crate::keys::KEYD_CHORD_1 {
+        if code >= crate::keys::KEYD_CHORD_1 && code <= crate::keys::KEYD_CHORD_MAX {
             let slot = (code - crate::keys::KEYD_CHORD_1) as usize;
             if slot < self.active_chords.len() && self.active_chords[slot].active != 0 {
                 return (self.active_chords[slot].chord.d, self.active_chords[slot].layer);

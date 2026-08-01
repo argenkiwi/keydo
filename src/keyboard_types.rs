@@ -1,6 +1,7 @@
 //! Core keyboard state machine types shared between `keyboard_impl` and the daemon.
 
 use crate::config::*;
+use crate::keys::{KEYD_CHORD_1, KEYD_CHORD_MAX};
 
 /// Cached descriptor for a currently-held key, so key-up can replay the same action.
 #[derive(Debug, Clone, Copy)]
@@ -42,8 +43,11 @@ pub enum ChordStatus {
 pub const CHORD_QUEUE_LEN: usize = 32;
 
 /// Chords that can be held down simultaneously. Slot `i` is addressed by the
-/// synthetic keycode `KEYD_CHORD_1 + i`.
-pub const MAX_ACTIVE_CHORDS: usize = 8;
+/// synthetic keycode `KEYD_CHORD_1 + i`. Derived from the actual reserved
+/// sentinel range (KEYD_CHORD_1..=KEYD_CHORD_MAX) rather than hardcoded, so
+/// it can never again exceed the codes real Linux KEY_* values (KEY_PLAYCD
+/// etc.) occupy immediately afterward.
+pub const MAX_ACTIVE_CHORDS: usize = (KEYD_CHORD_MAX - KEYD_CHORD_1 + 1) as usize;
 
 pub struct ChordState {
     pub queue: [KeyEvent; CHORD_QUEUE_LEN],
