@@ -11,6 +11,15 @@ keywords    = ["keyboard", "remap", "daemon", "macos", "input"]
 categories  = ["command-line-utilities"]
 readme      = "README.md"
 
+[[bin]]
+name = "keydo"
+path = "src/main.rs"
+
+[lib]
+name = "keydo"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
 [lints.rust]
 future-incompatible = "warn"
 nonstandard-style = "warn"
