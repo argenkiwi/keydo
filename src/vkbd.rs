@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 mod linux {
     use std::fs::{File, OpenOptions};
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::io::Write;
     use std::sync::Mutex;
@@ -74,7 +75,12 @@ mod linux {
         }
 
         fn create_virtual_keyboard(name: &str) -> Result<File, String> {
-            let file = OpenOptions::new().write(true).open("/dev/uinput").map_err(|e| e.to_string())?;
+            // Read access is required so read_led_event() can actually drain the
+            // kernel's LED-feedback queue below — a write-only fd still reports
+            // POLLIN for pending LED events but fails the read with EBADF,
+            // leaving the fd permanently "ready" and spinning the main poll loop.
+            let file = OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK)
+                .open("/dev/uinput").map_err(|e| e.to_string())?;
             let fd = file.as_raw_fd();
 
             ioctl(fd, UI_SET_EVBIT, EV_REP as i32);
