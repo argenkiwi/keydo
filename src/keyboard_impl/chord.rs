@@ -157,6 +157,17 @@ impl Keyboard {
             }
         }
 
+        // Events replayed from a pending-overload's deferred queue were
+        // already set aside waiting on an unrelated key's tap-vs-hold
+        // decision; letting them start or extend a fresh chord
+        // disambiguation here would let a key that has nothing to do with
+        // the chord get folded into `chord.queue` and reordered ahead of
+        // whatever's genuinely mid-chord. Already-active chords (handled
+        // above) are unaffected -- only new disambiguation is skipped.
+        if self.chord_suppressed {
+            return false;
+        }
+
         let state = self.chord.state;
         match state {
             ChordStatus::Resolving => false,

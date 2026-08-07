@@ -154,6 +154,14 @@ pub struct Keyboard {
     /// per-event scan over every active layer.
     pub has_chords: bool,
     pub chord: ChordState,
+    /// Set while replaying a pending-overload's deferred queue (see
+    /// `handle_pending_overload`). Those events were already deferred
+    /// waiting on an unrelated key's tap-vs-hold decision, so they must not
+    /// also be captured by an in-progress, unrelated chord disambiguation —
+    /// otherwise a key that has nothing to do with the chord can get
+    /// appended into `chord.queue` behind it, aborting the chord and
+    /// flushing both in queue order rather than real press order.
+    pub chord_suppressed: bool,
     pub pending_timeout: Option<TimeoutState>,
     pub pending_overload: Option<OverloadState>,
     pub layer_state: [LayerState; MAX_LAYERS],

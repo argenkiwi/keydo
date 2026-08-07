@@ -21,21 +21,34 @@ impl Keyboard {
                         self.last_repeatable_action = ra;
                         self.send_key(output, new_code, 1);
                         self.clear_oneshot(output);
+                        // Use the *actually* active mods (this descriptor's own,
+                        // plus whatever layers are externally held) rather than
+                        // just `mods` -- otherwise a plain-letter overloadi tap
+                        // fallback sent while a home-row-mod layer is active
+                        // (e.g. the `f` in a Meta+Control+F chord) still looks
+                        // "simple" and resets the idle clock, making the very
+                        // next home-row-mod key within 150ms wrongly resolve as
+                        // a fast-typing plain tap instead of a deliberate hold.
+                        if active_mods == 0 || active_mods == MOD_SHIFT {
+                            self.last_simple_key_time = time;
+                        }
                     } else {
                         self.send_key(output, new_code, 0);
-                        self.update_mods(output, -1, 0);
-                    }
-                    if mods == 0 || mods == MOD_SHIFT {
-                        self.last_simple_key_time = time;
+                        let active_mods = self.update_mods(output, -1, 0);
+                        if active_mods == 0 || active_mods == MOD_SHIFT {
+                            self.last_simple_key_time = time;
+                        }
                     }
                 } else {
                     // Passthrough (DescriptorData::None)
                     if pressed != 0 {
-                        self.update_mods(output, layer, 0);
+                        let active_mods = self.update_mods(output, layer, 0);
                         self.last_repeatable_action = d;
                         self.send_key(output, code, 1);
                         self.clear_oneshot(output);
-                        self.last_simple_key_time = time;
+                        if active_mods == 0 || active_mods == MOD_SHIFT {
+                            self.last_simple_key_time = time;
+                        }
                     } else {
                         self.send_key(output, code, 0);
                         self.update_mods(output, -1, 0);
