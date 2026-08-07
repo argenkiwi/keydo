@@ -43,7 +43,7 @@ impl Keyboard {
                 Some(po.action2)
             } else if code == po.code && pressed == 0 {
                 Some(po.action1)
-            } else if po.resolve_on_interrupt != 0 && pressed == 0 {
+            } else if code != 0 && po.resolve_on_interrupt != 0 && pressed == 0 {
                 Some(po.action2)
             } else {
                 None
