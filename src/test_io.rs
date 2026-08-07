@@ -1033,6 +1033,85 @@ mod tests {
         // Guard against the harness silently measuring nothing.
         assert!(output.keys > 0, "harness produced no output");
     }
+
+    #[test]
+    fn test_stale_chord_timeout_does_not_force_overload_to_hold() {
+        // Regression, reduced from a real `keydo monitor -t` capture: a
+        // home-row-mod key (`f`) resolved to its held modifier (`control`)
+        // even though it was released quickly, well within its own tap
+        // window, because an unrelated chord attempt (`x+y`) had aborted
+        // nearby in time.
+        //
+        // `handle_chord`'s Inactive/PendingDisambiguation states schedule a
+        // chord-interkey timeout on the first partial match, but
+        // `abort_chord` (fired here because the second key pressed doesn't
+        // belong to the same chord) never cancels that scheduled deadline --
+        // `self.timeouts` has no cancellation, only lazy pruning once a
+        // deadline has passed. That stale deadline sits in the timeout
+        // table and, if it later falls inside an unrelated `f` overload's
+        // pending window, surfaces as a synthetic `code == 0` tick fed
+        // straight into `handle_pending_overload`.
+        //
+        // `resolve_on_interrupt` is meant to mean "a real key was pressed or
+        // released while this overload was pending" (mirroring the sibling
+        // fix already applied to `handle_pending_timeout`), but its check
+        // only tested `pressed == 0` -- true for a synthetic tick as much as
+        // for a real release -- so the stale tick was misread as an
+        // interrupting keystroke and force-resolved `f` to `control` before
+        // `f` was ever actually released.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [global]\n\
+             chord_timeout = 300\n\n\
+             [main]\n\
+             x+y = esc\n\
+             f = overloadi(f, timeout(overloadt2(control, f, 200), 500, f), 150)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            // `q` is held throughout -- releasing it later is a real,
+            // never-enqueued interrupt, just like the anchor key's release
+            // was in the original capture.
+            KeyEvent { code: KEYD_Q, pressed: 1, timestamp: 0 },
+            // Starts a chord disambiguation (schedules a 300ms interkey
+            // timeout) that gets aborted synchronously moments later by a
+            // non-matching key -- leaving that 300ms deadline (relative to
+            // t=5, i.e. firing at t=305) stale.
+            KeyEvent { code: KEYD_X, pressed: 1, timestamp: 5 },
+            KeyEvent { code: KEYD_Z, pressed: 1, timestamp: 15 },
+            KeyEvent { code: KEYD_Z, pressed: 0, timestamp: 25 },
+            KeyEvent { code: KEYD_X, pressed: 0, timestamp: 35 },
+            // `f` held past its 150ms fast-typed threshold enters the
+            // timeout(...) branch...
+            KeyEvent { code: KEYD_F, pressed: 1, timestamp: 200 },
+            // ...and releasing the unrelated, already-held `q` interrupts
+            // it, converting to a pending overloadt2 (control-or-f) with a
+            // 200ms window (expires at 450ms) -- straddling the stale 305ms
+            // deadline from the aborted chord.
+            KeyEvent { code: KEYD_Q, pressed: 0, timestamp: 250 },
+            // `f` released well before its own 200ms window (450ms) and
+            // before the outer 500ms timeout -- this must resolve as a
+            // plain tap, not as `control`.
+            KeyEvent { code: KEYD_F, pressed: 0, timestamp: 350 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 5000 }]);
+
+        assert!(
+            !output.events.iter().any(|e| e.code == KEYD_LEFTCTRL),
+            "control must not activate -- f was released well within its tap window: {:?}",
+            output.events
+        );
+        assert!(
+            output.events.iter().any(|e| e.code == KEYD_F && e.pressed == 1)
+                && output.events.iter().any(|e| e.code == KEYD_F && e.pressed == 0),
+            "f must resolve to a plain tap: {:?}",
+            output.events
+        );
+    }
 }
 
 // ── Property-based fuzzing ───────────────────────────────────────────────────
