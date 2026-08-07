@@ -814,6 +814,167 @@ mod tests {
         Keyboard::new(config);
     }
 
+    // ── Stacked home-row mods (Meta+Control+F) ──────────────────────────────
+    //
+    // Reduced from a real-world "kenkyo" home-row-mod layout: `;` = meta,
+    // `j` = control, `f` = the chord target, each independently wrapped in
+    // the same `overloadi(key, timeout(overloadt2(mod, key, 200), 500, key), 150)`
+    // idiom.
+
+    #[test]
+    fn test_home_row_mod_chord_does_not_poison_next_attempt() {
+        // Regression: sending the literal 'f' character at the end of a
+        // successful Meta+Control+F chord updated `last_simple_key_time`
+        // using only the KeySequence descriptor's own baked-in mods (0 for
+        // a plain-letter tap fallback), ignoring the meta/control layers
+        // that were *externally* active via update_mods at that moment.
+        // That made the very next home-row-mod attempt within 150ms look
+        // like fast mid-word typing and collapse straight to plain,
+        // unmodified taps -- even though it was a fresh deliberate chord.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [main]\n\
+             f = overloadi(f, timeout(overloadt2(control, f, 200), 500, f), 150)\n\
+             j = overloadi(j, timeout(overloadt2(control, j, 200), 500, j), 150)\n\
+             semicolon = overloadi(semicolon, timeout(overloadt2(meta, semicolon, 200), 500, semicolon), 150)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let chord = |base: i32| -> [KeyEvent; 6] {
+            [
+                KeyEvent { code: KEYD_SEMICOLON, pressed: 1, timestamp: base },
+                KeyEvent { code: KEYD_J,         pressed: 1, timestamp: base },
+                KeyEvent { code: KEYD_F,         pressed: 1, timestamp: base + 5 },
+                KeyEvent { code: KEYD_F,         pressed: 0, timestamp: base + 45 },
+                KeyEvent { code: KEYD_J,         pressed: 0, timestamp: base + 65 },
+                KeyEvent { code: KEYD_SEMICOLON, pressed: 0, timestamp: base + 85 },
+            ]
+        };
+
+        let mut events = chord(1000).to_vec();
+        events.extend(chord(1100)); // 15ms after the first chord's f-release
+        kbd.kbd_process_events(&mut output, &events);
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 5000 }]);
+
+        let meta_count = output.events.iter().filter(|e| e.code == KEYD_LEFTMETA && e.pressed == 1).count();
+        let ctrl_count = output.events.iter().filter(|e| e.code == KEYD_LEFTCTRL && e.pressed == 1).count();
+        assert_eq!(meta_count, 2, "meta should activate on both attempts, not just the first");
+        assert_eq!(ctrl_count, 2, "control should activate on both attempts, not just the first");
+    }
+
+    #[test]
+    fn test_timeout_hold_not_defeated_by_unrelated_key_release() {
+        // Regression, reduced from a real `keydo monitor -t` capture: `;`
+        // (meta) held, `j` (control) held, and `e` -- a chord participant
+        // (`w+e`), unrelated to either -- tapped in between. `e`'s own
+        // press gets caught by the chord state machine first, so by the
+        // time `j` gets its first real dispatch (deferred behind `;`'s own
+        // resolution), the only event left before `j`'s outer `timeout(...,
+        // 500, j)` window elapses is `e`'s *release*. `Op::Timeout`'s old
+        // interrupt check only recognized another key's press or this key's
+        // own release, not another key's release, so that timer ran out
+        // uninterrupted and `j` fell through to its "held alone too long"
+        // fallback (plain `j`) despite being held for 853ms afterward.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [main]\n\
+             j = overloadi(j, timeout(overloadt2(control, j, 200), 500, j), 150)\n\
+             semicolon = overloadi(semicolon, timeout(overloadt2(meta, semicolon, 200), 500, semicolon), 150)\n\
+             w+e = esc\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // Real deltas from `keydo monitor -t`: ; down, +126 j down, +175 e
+        // down, +94 e up, +853 j up, +8 ; up.
+        let sc_down = 10_000i32;
+        let j_down  = sc_down + 126;
+        let e_down  = j_down + 175;
+        let e_up    = e_down + 94;
+        let j_up    = e_up + 853;
+        let sc_up   = j_up + 8;
+
+        let events = [
+            KeyEvent { code: KEYD_SEMICOLON, pressed: 1, timestamp: sc_down },
+            KeyEvent { code: KEYD_J,         pressed: 1, timestamp: j_down },
+            KeyEvent { code: KEYD_E,         pressed: 1, timestamp: e_down },
+            KeyEvent { code: KEYD_E,         pressed: 0, timestamp: e_up },
+            KeyEvent { code: KEYD_J,         pressed: 0, timestamp: j_up },
+            KeyEvent { code: KEYD_SEMICOLON, pressed: 0, timestamp: sc_up },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: sc_up + 2000 }]);
+
+        assert!(
+            !output.events.iter().any(|e| e.code == KEYD_J),
+            "j must resolve to the control layer, not a literal 'j' keystroke: {:?}",
+            output.events
+        );
+        assert_eq!(
+            output.events.iter().filter(|e| e.code == KEYD_LEFTCTRL && e.pressed == 1).count(),
+            1,
+            "control should activate exactly once: {:?}",
+            output.events
+        );
+    }
+
+    #[test]
+    fn test_chord_queue_does_not_reorder_events_deferred_by_pending_overload() {
+        // Same real-world sequence as the test above, but this one guards
+        // the *other* half of the bug: `e`'s press gets caught by the chord
+        // state machine (as a partial match for `w+e`) while `j`'s press is
+        // still deferred inside `;`'s pending_overload. When `;` resolves to
+        // `meta` and replays the deferred `j`, that replayed event used to
+        // pass through `handle_chord` as if it were a fresh keypress,
+        // getting appended into the *same* `chord.queue` already holding
+        // `e` -- aborting the chord and flushing both in queue order (`e`
+        // then `j`) rather than real press order (`j` then `e`). That let
+        // `e` fire before `control` (from `j`) had even activated.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [main]\n\
+             j = overloadi(j, timeout(overloadt2(control, j, 200), 500, j), 150)\n\
+             semicolon = overloadi(semicolon, timeout(overloadt2(meta, semicolon, 200), 500, semicolon), 150)\n\
+             w+e = esc\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let sc_down = 10_000i32;
+        let j_down  = sc_down + 126;
+        let e_down  = j_down + 175;
+        let e_up    = e_down + 94;
+        let j_up    = e_up + 853;
+        let sc_up   = j_up + 8;
+
+        let events = [
+            KeyEvent { code: KEYD_SEMICOLON, pressed: 1, timestamp: sc_down },
+            KeyEvent { code: KEYD_J,         pressed: 1, timestamp: j_down },
+            KeyEvent { code: KEYD_E,         pressed: 1, timestamp: e_down },
+            KeyEvent { code: KEYD_E,         pressed: 0, timestamp: e_up },
+            KeyEvent { code: KEYD_J,         pressed: 0, timestamp: j_up },
+            KeyEvent { code: KEYD_SEMICOLON, pressed: 0, timestamp: sc_up },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: sc_up + 2000 }]);
+
+        // `e` must be sent while control is active -- i.e. control activates
+        // (from j) strictly before e's keydown reaches the OS.
+        let mut ctrl_active = false;
+        for ev in &output.events {
+            if ev.code == KEYD_LEFTCTRL {
+                ctrl_active = ev.pressed != 0;
+            }
+            if ev.code == KEYD_E && ev.pressed == 1 {
+                assert!(ctrl_active, "e fired before control activated: {:?}", output.events);
+            }
+        }
+    }
+
     // ── Throughput harness ───────────────────────────────────────────────────
     //
     // Not a correctness test — a repeatable before/after number for changes to

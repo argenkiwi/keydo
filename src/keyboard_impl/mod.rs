@@ -66,6 +66,7 @@ impl Keyboard {
                 last_code_time: 0,
                 state: ChordStatus::Inactive,
             },
+            chord_suppressed: false,
             pending_timeout: None,
             pending_overload: None,
             layer_state: {

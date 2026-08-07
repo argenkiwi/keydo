@@ -75,7 +75,10 @@ impl Keyboard {
             self.execute_descriptor(output, action, overload_code, dl, 1, time);
 
             if queue_sz > 0 {
+                let prev_suppressed = self.chord_suppressed;
+                self.chord_suppressed = true;
                 self.kbd_process_events(output, &queue_snap[..queue_sz]);
+                self.chord_suppressed = prev_suppressed;
             }
         }
 

@@ -21,9 +21,15 @@ impl Keyboard {
             } else {
                 None
             }
-        } else if time >= pt_expiration
-            || (code != 0 && (pressed != 0 || code == pt_code))
-        {
+        } else if time >= pt_expiration || code != 0 {
+            // Any other real key event -- a press *or a release* -- counts
+            // as an interrupt, not just a press or this key's own release.
+            // Ignoring another key's release let a long, deliberate hold
+            // (e.g. holding a home-row mod while a chord-participant key
+            // gets pressed and released underneath it) run out this timer's
+            // own clock uninterrupted, falling through to its "held alone
+            // too long" fallback even though something else was clearly
+            // happening at the same time.
             let action = if time >= pt_expiration { pt_action2 } else { pt_action1 };
             Some((action, false))
         } else {
