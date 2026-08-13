@@ -2,12 +2,21 @@ use crate::config::*;
 use crate::keyboard_types::*;
 
 impl Keyboard {
-    pub(super) fn resolve_descriptor(&self, code: u8) -> (Descriptor, i32) {
+    /// Maps a synthetic chord keycode back to its `active_chords` slot index.
+    pub(super) fn chord_slot(code: u8) -> Option<usize> {
         if (crate::keys::KEYD_CHORD_1..=crate::keys::KEYD_CHORD_MAX).contains(&code) {
-            let slot = (code - crate::keys::KEYD_CHORD_1) as usize;
-            if slot < self.active_chords.len() && self.active_chords[slot].active != 0 {
-                return (self.active_chords[slot].chord.d, self.active_chords[slot].layer);
-            }
+            Some((code - crate::keys::KEYD_CHORD_1) as usize)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn resolve_descriptor(&self, code: u8) -> (Descriptor, i32) {
+        if let Some(slot) = Self::chord_slot(code)
+            && slot < self.active_chords.len()
+            && self.active_chords[slot].active != 0
+        {
+            return (self.active_chords[slot].chord.d, self.active_chords[slot].layer);
         }
 
         // Single-pass max-scan over active layers, mirroring keyd's
@@ -108,6 +117,19 @@ impl Keyboard {
                 let cleared = self.cache_set(code, None);
                 debug_assert!(cleared, "cache_set(None) failed to clear code {code} we just found via cache_get");
                 self.execute_descriptor(output, d, code, dl, pressed, time);
+
+                // A resolved chord's synthetic release: the action has now
+                // actually been dispatched (not merely captured into some
+                // unrelated pending_overload's deferred queue), so the slot
+                // is truly done. Freeing it here -- anchored to the cache
+                // entry's own lifetime, like every other code -- instead of
+                // at handle_chord's physical-key release-count bookkeeping
+                // keeps active_chords[slot].chord.d (what resolve_descriptor
+                // reads) alive for as long as this code might still be
+                // sitting in a deferred queue.
+                if let Some(slot) = Self::chord_slot(code) {
+                    self.active_chords[slot].active = 0;
+                }
             }
         }
     }

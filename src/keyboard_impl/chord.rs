@@ -149,7 +149,6 @@ impl Keyboard {
                 }
                 if found {
                     if nremaining == 0 {
-                        self.active_chords[i].active = 0;
                         self.process_event(output, chord_code, 0, time);
                     }
                     return true;
