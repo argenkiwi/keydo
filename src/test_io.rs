@@ -975,6 +975,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_chord_resolution_survives_unrelated_pending_overload_deferral() {
+        // Regression: holding a home-row-mod (`d`) long enough to open its
+        // own pending_overload window, then tapping an unrelated chord
+        // (`comma+dot`), used to lose the chord's action entirely. The
+        // chord's synthetic resolution event got captured into `d`'s
+        // pending_overload deferred queue (handle_pending_overload only
+        // resolves early on a release, never a press) before ever reaching
+        // resolve_descriptor. By the time that queue replayed (once `d`'s
+        // overload resolved to `shift`), handle_chord's physical-key
+        // release tracking had already cleared active_chords[slot].active,
+        // so resolve_descriptor fell through to an unbound lookup instead
+        // of the chord's real "enter" descriptor -- the chord produced no
+        // output at all.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n\
+             [main]\n\
+             d = overloadi(d, timeout(overloadt2(shift, d, 200), 500, d), 150)\n\
+             comma+dot = enter\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let d_down     = 1_000i32;
+        let comma_down = d_down + 160;   // past d's 150ms fast-typed threshold
+        let dot_down   = comma_down + 20;
+        let comma_up   = dot_down + 30;
+        let dot_up     = comma_up + 10;  // both chord keys released -> interrupts d's overload
+
+        let events = [
+            KeyEvent { code: KEYD_D,     pressed: 1, timestamp: d_down },
+            KeyEvent { code: KEYD_COMMA, pressed: 1, timestamp: comma_down },
+            KeyEvent { code: KEYD_DOT,   pressed: 1, timestamp: dot_down },
+            KeyEvent { code: KEYD_COMMA, pressed: 0, timestamp: comma_up },
+            KeyEvent { code: KEYD_DOT,   pressed: 0, timestamp: dot_up },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: dot_up + 2000 }]);
+
+        let shift_idx = output.events.iter().position(|e| e.code == KEYD_LEFTSHIFT && e.pressed == 1);
+        let enter_down_idx = output.events.iter().position(|e| e.code == KEYD_ENTER && e.pressed == 1);
+        let enter_up_idx = output.events.iter().position(|e| e.code == KEYD_ENTER && e.pressed == 0);
+
+        assert!(shift_idx.is_some(), "shift must activate from d's overload: {:?}", output.events);
+        assert!(enter_down_idx.is_some(), "chord must still resolve to enter: {:?}", output.events);
+        assert!(enter_up_idx.is_some(), "enter's key-up must also be emitted: {:?}", output.events);
+        assert!(
+            shift_idx.unwrap() < enter_down_idx.unwrap() && enter_down_idx.unwrap() < enter_up_idx.unwrap(),
+            "expected shift, then enter down, then enter up, in that order: {:?}",
+            output.events
+        );
+    }
+
     // ── Throughput harness ───────────────────────────────────────────────────
     //
     // Not a correctness test — a repeatable before/after number for changes to
