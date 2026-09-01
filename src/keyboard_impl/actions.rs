@@ -286,6 +286,14 @@ impl Keyboard {
                         let nested = self.config.descriptors[ai];
                         self.execute_descriptor(output, nested, code, layer, 1, time);
                     }
+                    if layer >= 0
+                        && (layer as usize) < self.config.layers.len()
+                        && self.layer_state[layer as usize].oneshot_depth > 0
+                    {
+                        let ol = layer as usize;
+                        self.deactivate_layer(output, ol);
+                        self.layer_state[ol].oneshot_depth -= 1;
+                    }
                     self.activate_layer(output, code, idx, time);
                     self.update_mods(output, layer, 0);
                     self.oneshot_latch = 1;
@@ -305,14 +313,22 @@ impl Keyboard {
                         }
                     } else {
                         self.deactivate_layer(output, idx);
-                        self.update_mods(output, -1, 0);
                     }
+                    self.update_mods(output, -1, 0);
                 }
             }
 
             Op::OneshotMulti => {
                 if let DescriptorData::LayerMulti(lm) = d.data {
                     if pressed != 0 {
+                        if layer >= 0
+                            && (layer as usize) < self.config.layers.len()
+                            && self.layer_state[layer as usize].oneshot_depth > 0
+                        {
+                            let ol = layer as usize;
+                            self.deactivate_layer(output, ol);
+                            self.layer_state[ol].oneshot_depth -= 1;
+                        }
                         for &i in lm.idx.iter().filter(|&&i| i != -1) {
                             self.activate_layer(output, code, i as usize, time);
                         }

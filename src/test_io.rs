@@ -498,6 +498,70 @@ mod tests {
     }
 
     #[test]
+    fn test_oneshotm_inside_oneshot_layer_pops_originating_layer() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(macros)\n\n[macros]\ndot = oneshotm(shift, macro(dot space))\na = oneshotm(shift, macro(S-1 space))\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // 1. Activate oneshot(macros)
+        // 2. Press dot -> executes macro(dot space) and arms oneshot(shift), consuming macros layer
+        // 3. Press a -> should resolve on main as shifted 'a' (A), NOT macro S-1 in macros layer
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_DOT,      pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_DOT,      pressed: 0, timestamp: 30 },
+            KeyEvent { code: KEYD_A,        pressed: 1, timestamp: 40 },
+            KeyEvent { code: KEYD_A,        pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let key_down_codes: Vec<u8> = output.events.iter()
+            .filter(|e| e.pressed != 0)
+            .map(|e| e.code)
+            .collect();
+
+        // Macro outputs dot, space. Then Shift+A outputs leftshift, A.
+        assert_eq!(key_down_codes, vec![KEYD_DOT, KEYD_SPACE, KEYD_LEFTSHIFT, KEYD_A]);
+    }
+
+    #[test]
+    fn test_oneshot_modifier_chaining_aggregates() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nx = oneshot(shift)\ny = oneshot(control)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // Tap oneshot(shift), tap oneshot(control), then tap 'a'
+        let events = [
+            KeyEvent { code: KEYD_X, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_X, pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_Y, pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_Y, pressed: 0, timestamp: 30 },
+            KeyEvent { code: KEYD_A, pressed: 1, timestamp: 40 },
+            KeyEvent { code: KEYD_A, pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let a_down_idx = output.events.iter().position(|e| e.code == KEYD_A && e.pressed != 0)
+            .expect("A must be emitted");
+        let events_before_a = &output.events[..a_down_idx];
+
+        let shift_active = events_before_a.iter().rev().find(|e| e.code == KEYD_LEFTSHIFT)
+            .map(|e| e.pressed != 0).unwrap_or(false);
+        let ctrl_active = events_before_a.iter().rev().find(|e| e.code == KEYD_LEFTCTRL)
+            .map(|e| e.pressed != 0).unwrap_or(false);
+
+        assert!(shift_active, "shift should be active when A is pressed");
+        assert!(ctrl_active, "ctrl should be active when A is pressed");
+    }
+
+    #[test]
     fn test_overload_tap() {
         // capslock = overload(control, esc): quick tap → ESC
         let mut cfg = Config::new();
