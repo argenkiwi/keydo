@@ -79,6 +79,7 @@ pub struct ChordState {
 pub struct TimeoutState {
     pub code: u8,
     pub dl: u8,
+    pub dl_oneshot_depth: u8,
     pub spontaneous: u8,
     pub expiration: i64,
     pub activation_time: i64,
@@ -89,6 +90,7 @@ pub struct TimeoutState {
 pub struct OverloadState {
     pub code: u8,
     pub dl: u8,
+    pub dl_oneshot_depth: u8,
     pub expiration: i64,
     pub resolve_on_interrupt: i32,
     pub queue: [KeyEvent; CHORD_QUEUE_LEN],

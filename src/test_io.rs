@@ -562,6 +562,132 @@ mod tests {
     }
 
     #[test]
+    fn test_layer_inside_oneshot_layer_pops_originating_layer() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(macros)\n\n[nav]\n\n[macros]\nn = layer(nav)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // 1. Activate oneshot(macros).
+        // 2. Tap n -> resolves within macros as Op::Layer, activating nav. Its press
+        //    branch must pop the originating macros layer just like the oneshot-family
+        //    ops do, or macros lingers active forever.
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_N,        pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_N,        pressed: 0, timestamp: 30 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let macros_idx = kbd.config.layers.iter().position(|l| l.name == "macros").unwrap();
+        assert_eq!(kbd.layer_state[macros_idx].active, 0,
+            "originating oneshot layer 'macros' must be popped when a layer() key is triggered from within it");
+    }
+
+    #[test]
+    fn test_overload_inside_oneshot_layer_pops_originating_layer() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(macros)\n\n[fnav]\n\n[macros]\nf = overload(fnav, esc)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // 1. Activate oneshot(macros).
+        // 2. Tap f -> resolves within macros as Op::Overload, activating fnav. Its
+        //    press branch must pop the originating macros layer too.
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_F,        pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_F,        pressed: 0, timestamp: 30 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let macros_idx = kbd.config.layers.iter().position(|l| l.name == "macros").unwrap();
+        assert_eq!(kbd.layer_state[macros_idx].active, 0,
+            "originating oneshot layer 'macros' must be popped when an overload() key is triggered from within it");
+    }
+
+    #[test]
+    fn test_oneshot_double_arm_fully_clears_on_pop() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(macros)\n\n[macros]\ndot = oneshot(control)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // Tap capslock twice before consuming it: oneshot_depth[macros] reaches 2
+        // (active[macros] reaches 2 too, since each tap calls activate_layer). A
+        // single decrement/deactivate on pop would leave macros still active; the
+        // pop must fully retire it regardless of how many times it was armed.
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 30 },
+            KeyEvent { code: KEYD_DOT,      pressed: 1, timestamp: 40 },
+            KeyEvent { code: KEYD_DOT,      pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let macros_idx = kbd.config.layers.iter().position(|l| l.name == "macros").unwrap();
+        assert_eq!(kbd.layer_state[macros_idx].oneshot_depth, 0,
+            "a layer armed twice before being consumed must have its oneshot_depth fully cleared on pop");
+        assert_eq!(kbd.layer_state[macros_idx].active, 0,
+            "a layer armed twice before being consumed must be fully deactivated on pop");
+    }
+
+    #[test]
+    fn test_deferred_overload_oneshot_pop_ignores_unrelated_latch() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(macros)\n\n[nav]\n\n[somelayer]\n\n[macros]\nx = overloadt(somelayer, oneshot(nav), 200)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // 1. Arm macros (oneshot_depth == 1), then press x from within it. x is an
+        //    overloadt() key, so this arms a pending_overload whose deferred tap
+        //    action (oneshot(nav)) captures dl = macros' index and a snapshot of its
+        //    oneshot_depth (1) at this exact moment.
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            KeyEvent { code: KEYD_X,        pressed: 1, timestamp: 20 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let macros_idx = kbd.config.layers.iter().position(|l| l.name == "macros").unwrap();
+        assert_eq!(kbd.layer_state[macros_idx].oneshot_depth, 1);
+        assert!(kbd.pending_overload.is_some(), "x should have armed a pending overload");
+
+        // 2. Simulate an unrelated event legitimately re-arming macros' oneshot latch
+        //    while x's action is still deferred and pending (the real dispatcher
+        //    queues, rather than interleaves, events behind a pending overload, so
+        //    poke the state directly to exercise exactly what the guard protects).
+        kbd.layer_state[macros_idx].oneshot_depth = 2;
+        kbd.layer_state[macros_idx].active = 2;
+
+        // 3. Let x's pending overload resolve via its own quick release -> its tap
+        //    action (oneshot(nav)) executes with the stale dl/snapshot captured in
+        //    step 1.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: KEYD_X, pressed: 0, timestamp: 30 }]);
+
+        // The live oneshot_depth (2) no longer matches the snapshot taken when `x`
+        // was pressed (1), so the pop-check must skip popping -- the unrelated
+        // re-arm must survive untouched.
+        assert_eq!(kbd.layer_state[macros_idx].oneshot_depth, 2,
+            "stale replay must not pop an unrelated oneshot latch");
+        assert_eq!(kbd.layer_state[macros_idx].active, 2,
+            "stale replay must not deactivate an unrelated oneshot latch");
+    }
+
+    #[test]
     fn test_overload_tap() {
         // capslock = overload(control, esc): quick tap → ESC
         let mut cfg = Config::new();

@@ -3,7 +3,8 @@ use crate::keyboard_types::*;
 use crate::keys::*;
 
 impl Keyboard {
-    pub(super) fn execute_descriptor<O: Output>(&mut self, output: &mut O, d: Descriptor, code: u8, layer: i32, pressed: u8, time: i64) {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_descriptor<O: Output>(&mut self, output: &mut O, d: Descriptor, code: u8, layer: i32, pressed: u8, time: i64, oneshot_snapshot: Option<u8>) {
         match d.op {
             Op::KeySequence => {
                 if let DescriptorData::KeySequence(ks) = d.data {
@@ -63,6 +64,7 @@ impl Keyboard {
                     _ => return,
                 };
                 if pressed != 0 {
+                    self.pop_originating_oneshot_layer(output, layer, oneshot_snapshot);
                     if d.op == Op::LayerM && let DescriptorData::LayerMacro(lm) = d.data {
                         self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
@@ -180,7 +182,7 @@ impl Keyboard {
             Op::Repeat => {
                 if pressed != 0 {
                     let ra = self.last_repeatable_action;
-                    self.execute_descriptor(output, ra, code, layer, 1, time);
+                    self.execute_descriptor(output, ra, code, layer, 1, time, None);
                     if let Some(ce) = self.cache_find_mut(code) {
                         ce.d = ra;
                     }
@@ -193,6 +195,7 @@ impl Keyboard {
                     let action_desc = self.config.descriptors[ov.action_idx as usize];
                     if pressed != 0 {
                         self.overload_start_time = time;
+                        self.pop_originating_oneshot_layer(output, layer, oneshot_snapshot);
                         self.activate_layer(output, code, layer_idx, time);
                         self.update_mods(output, -1, 0);
                     } else {
@@ -203,8 +206,8 @@ impl Keyboard {
                             && (tap_timeout == 0
                                 || (time - self.overload_start_time) < tap_timeout);
                         if is_tap {
-                            self.execute_descriptor(output, action_desc, code, layer, 1, time);
-                            self.execute_descriptor(output, action_desc, code, layer, 0, time);
+                            self.execute_descriptor(output, action_desc, code, layer, 1, time, None);
+                            self.execute_descriptor(output, action_desc, code, layer, 0, time, None);
                         }
                     }
                 }
@@ -218,9 +221,15 @@ impl Keyboard {
                         data: DescriptorData::Layer(DescLayer { idx: ov.layer_idx }),
                     };
                     let expiration = time + ov.timeout as i64;
+                    let dl_oneshot_depth = if layer >= 0 && (layer as usize) < self.config.layers.len() {
+                        self.layer_state[layer as usize].oneshot_depth
+                    } else {
+                        0
+                    };
                     self.pending_overload = Some(OverloadState {
                         code,
                         dl: layer as u8,
+                        dl_oneshot_depth,
                         expiration,
                         resolve_on_interrupt: i32::from(d.op == Op::OverloadTimeoutTap),
                         queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
@@ -240,7 +249,7 @@ impl Keyboard {
                     } else {
                         self.config.descriptors[ov.action1_idx as usize]
                     };
-                    self.execute_descriptor(output, action, code, layer, 1, time);
+                    self.execute_descriptor(output, action, code, layer, 1, time, None);
                     if let Some(ce) = self.cache_find_mut(code) {
                         ce.d = action;
                     }
@@ -253,9 +262,15 @@ impl Keyboard {
                         let action1     = self.config.descriptors[to.action1_idx as usize];
                         let action2     = self.config.descriptors[to.action2_idx as usize];
                         let expiration  = time + to.timeout as i64;
+                        let dl_oneshot_depth = if layer >= 0 && (layer as usize) < self.config.layers.len() {
+                            self.layer_state[layer as usize].oneshot_depth
+                        } else {
+                            0
+                        };
                         self.pending_timeout = Some(TimeoutState {
                             code,
                             dl: layer as u8,
+                            dl_oneshot_depth,
                             spontaneous: 0,
                             expiration,
                             activation_time: time,
@@ -279,20 +294,13 @@ impl Keyboard {
                 };
 
                 if pressed != 0 {
+                    self.pop_originating_oneshot_layer(output, layer, oneshot_snapshot);
                     if d.op == Op::OneshotM && let DescriptorData::LayerMacro(lm) = d.data {
                         self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
                     if let Some(ai) = nested_idx {
                         let nested = self.config.descriptors[ai];
-                        self.execute_descriptor(output, nested, code, layer, 1, time);
-                    }
-                    if layer >= 0
-                        && (layer as usize) < self.config.layers.len()
-                        && self.layer_state[layer as usize].oneshot_depth > 0
-                    {
-                        let ol = layer as usize;
-                        self.deactivate_layer(output, ol);
-                        self.layer_state[ol].oneshot_depth -= 1;
+                        self.execute_descriptor(output, nested, code, layer, 1, time, None);
                     }
                     self.activate_layer(output, code, idx, time);
                     self.update_mods(output, layer, 0);
@@ -300,7 +308,7 @@ impl Keyboard {
                 } else {
                     if let Some(ai) = nested_idx {
                         let nested = self.config.descriptors[ai];
-                        self.execute_descriptor(output, nested, code, layer, 0, time);
+                        self.execute_descriptor(output, nested, code, layer, 0, time, None);
                     }
 
                     if self.oneshot_latch != 0 {
@@ -313,22 +321,15 @@ impl Keyboard {
                         }
                     } else {
                         self.deactivate_layer(output, idx);
+                        self.update_mods(output, -1, 0);
                     }
-                    self.update_mods(output, -1, 0);
                 }
             }
 
             Op::OneshotMulti => {
                 if let DescriptorData::LayerMulti(lm) = d.data {
                     if pressed != 0 {
-                        if layer >= 0
-                            && (layer as usize) < self.config.layers.len()
-                            && self.layer_state[layer as usize].oneshot_depth > 0
-                        {
-                            let ol = layer as usize;
-                            self.deactivate_layer(output, ol);
-                            self.layer_state[ol].oneshot_depth -= 1;
-                        }
+                        self.pop_originating_oneshot_layer(output, layer, oneshot_snapshot);
                         for &i in lm.idx.iter().filter(|&&i| i != -1) {
                             self.activate_layer(output, code, i as usize, time);
                         }

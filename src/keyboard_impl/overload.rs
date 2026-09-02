@@ -53,11 +53,11 @@ impl Keyboard {
         };
 
         if let Some(action) = resolve {
-            let (overload_code, dl, queue_snap, queue_sz) = if let Some(po) = self.pending_overload.as_ref() {
+            let (overload_code, dl, dl_oneshot_depth, queue_snap, queue_sz) = if let Some(po) = self.pending_overload.as_ref() {
                 let sz = po.queue_sz;
                 let mut q = [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32];
                 q[..sz].copy_from_slice(&po.queue[..sz]);
-                (po.code, po.dl as i32, q, sz)
+                (po.code, po.dl as i32, po.dl_oneshot_depth, q, sz)
             } else {
                 return true;
             };
@@ -72,7 +72,7 @@ impl Keyboard {
                 "cache table full ({CACHE_SIZE} slots) inserting overload code {overload_code}; \
                  its key-up will be silently dropped"
             );
-            self.execute_descriptor(output, action, overload_code, dl, 1, time);
+            self.execute_descriptor(output, action, overload_code, dl, 1, time, Some(dl_oneshot_depth));
 
             if queue_sz > 0 {
                 let prev_suppressed = self.chord_suppressed;
