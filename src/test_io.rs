@@ -1246,8 +1246,10 @@ mod proptests {
         let mut layers = String::new();
         let mut codes = Vec::new();
         for &(name, code) in &ALPHABET[..n] {
-            main.push_str(&format!("{name} = layer(layer_{name})\n"));
-            layers.push_str(&format!("[layer_{name}]\nesc = esc\n\n"));
+            use std::fmt::Write;
+            // Writing to a String is infallible.
+            let _ = writeln!(main, "{name} = layer(layer_{name})");
+            let _ = write!(layers, "[layer_{name}]\nesc = esc\n\n");
             codes.push(code);
         }
         (format!("{main}\n{layers}"), codes)
