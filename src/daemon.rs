@@ -426,8 +426,13 @@ impl Daemon {
         #[cfg(target_os = "linux")]
         {
             let sp = libc::sched_param { sched_priority: REALTIME_SCHED_PRIORITY };
+            // SCHED_RESET_ON_FORK: anything this thread forks or spawns —
+            // notably command(...) children — starts as plain SCHED_OTHER
+            // instead of inheriting realtime FIFO priority, where a CPU-bound
+            // command could starve the desktop. Done here rather than via a
+            // pre_exec reset so spawn keeps its posix_spawn fast path.
             // SAFETY: pid 0 means current process; SCHED_FIFO with priority 49 is a valid real-time policy.
-            if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &sp) } != 0 {
+            if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO | libc::SCHED_RESET_ON_FORK, &sp) } != 0 {
                 log::warn!("sched_setscheduler: {}", std::io::Error::last_os_error());
             }
             // SAFETY: MCL_CURRENT | MCL_FUTURE are valid mlockall flags with no memory-safety requirements.
