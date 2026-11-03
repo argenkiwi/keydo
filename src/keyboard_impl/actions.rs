@@ -361,9 +361,12 @@ impl Keyboard {
 
             Op::Command => {
                 if pressed != 0 && let DescriptorData::Command(cmd_d) = d.data {
-                    let cmd = self.config.commands[cmd_d.cmd_idx as usize].cmd.clone();
+                    // The Child is dropped unwaited; the daemon loop reaps it
+                    // (see daemon.rs `reap_children`). Don't add a pre_exec
+                    // hook here: it forces a full fork instead of posix_spawn.
+                    let cmd = &self.config.commands[cmd_d.cmd_idx as usize].cmd;
                     let _ = std::process::Command::new("/bin/sh")
-                        .args(["-c", &cmd])
+                        .args(["-c", cmd])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())

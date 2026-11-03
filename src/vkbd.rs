@@ -309,27 +309,29 @@ mod macos_vkbd {
 
                 loop {
                     // Wait until a key is armed.
-                    let (rev, key) = {
-                        let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                        while !st.repeat.armed {
-                            st = cvar.wait(st).unwrap_or_else(std::sync::PoisonError::into_inner);
-                        }
-                        (st.repeat.revision, st.repeat.key)
-                    };
+                    let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    while !st.repeat.armed {
+                        st = cvar.wait(st).unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
+                    let (rev, key) = (st.repeat.revision, st.repeat.key);
 
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-
-                    // Fire repeats at the system interval until cancelled.
+                    // Wait out the initial delay, then fire at the system
+                    // interval. Both waits wake early when send_key bumps the
+                    // revision (release or a new key), so a key pressed while a
+                    // previous key's delay was still running starts its own
+                    // delay from its press, not after the stale one finishes.
+                    let mut wait = std::time::Duration::from_millis(delay_ms);
                     loop {
-                        let st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        st = cvar.wait_timeout_while(st, wait, |s| s.repeat.revision == rev)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner).0;
                         if st.repeat.revision != rev {
                             break;
                         }
                         let key_states = st.key_states;
                         drop(st);
-
                         macos_input::post_key_repeat(key, &key_states);
-                        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+                        st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        wait = std::time::Duration::from_millis(interval_ms);
                     }
                 }
             });
@@ -383,6 +385,8 @@ mod macos_vkbd {
                 } else if st.repeat.key == cgkey && st.repeat.armed {
                     st.repeat.armed     = false;
                     st.repeat.revision += 1;
+                    // Wake the repeat thread out of its timed wait.
+                    cvar.notify_one();
                 }
             }
         }
@@ -517,26 +521,28 @@ mod windows_vkbd {
 
                 loop {
                     // Wait until a key is armed.
-                    let (rev, key) = {
-                        let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                        while !st.armed {
-                            st = cvar.wait(st).unwrap_or_else(std::sync::PoisonError::into_inner);
-                        }
-                        (st.revision, st.key)
-                    };
+                    let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    while !st.armed {
+                        st = cvar.wait(st).unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
+                    let (rev, key) = (st.revision, st.key);
 
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-
-                    // Fire repeats at the system interval until cancelled.
+                    // Wait out the initial delay, then fire at the system
+                    // interval. Both waits wake early when send_key bumps the
+                    // revision (release or a new key), so a key pressed while a
+                    // previous key's delay was still running starts its own
+                    // delay from its press, not after the stale one finishes.
+                    let mut wait = std::time::Duration::from_millis(delay_ms);
                     loop {
-                        let st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        st = cvar.wait_timeout_while(st, wait, |s| s.revision == rev)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner).0;
                         if st.revision != rev {
                             break;
                         }
                         drop(st);
-
                         inject_key(key, true);
-                        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+                        st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        wait = std::time::Duration::from_millis(interval_ms);
                     }
                 }
             });
@@ -576,6 +582,8 @@ mod windows_vkbd {
                 } else if st.key == code && st.armed {
                     st.armed     = false;
                     st.revision += 1;
+                    // Wake the repeat thread out of its timed wait.
+                    cvar.notify_one();
                 }
             }
         }

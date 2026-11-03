@@ -549,6 +549,8 @@ unsafe extern "C" {}
 unsafe extern "C" {
     fn objc_getClass(name: *const c_char) -> *const c_void;
     fn sel_registerName(name: *const c_char) -> *const c_void;
+    fn objc_autoreleasePoolPush() -> *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
 
     // objc_msgSend typed for [NSEvent otherEventWithType:location:modifierFlags:
     //                          timestamp:windowNumber:context:subtype:data1:data2:]
@@ -612,17 +614,61 @@ pub fn keyd_to_nx_keytype(keyd: u8) -> Option<isize> {
 /// Volume, brightness, play/pause, next, previous keys cannot be injected via
 /// CGEventCreateKeyboardEvent on modern macOS. They require NX_SYSDEFINED events.
 pub fn post_media_key(nx_type: isize, pressed: bool) {
-    // SAFETY: Objective-C runtime calls via raw selectors; all pointer arguments are valid or null as required.
+    // SAFETY: the pool is pushed and popped on this thread around every
+    // Objective-C call below, so autoreleased objects are drained here.
     unsafe {
+        // `otherEventWithType:` returns an autoreleased NSEvent and this runs
+        // on the daemon thread, which has no autorelease pool of its own —
+        // without one, every media-key event would leak.
+        let pool = objc_autoreleasePoolPush();
+        post_media_key_inner(nx_type, pressed);
+        objc_autoreleasePoolPop(pool);
+    }
+}
+
+/// Class and selector addresses for media-key injection, resolved once.
+/// Stored as `usize` because raw pointers are not `Sync`; class objects and
+/// registered selectors live for the life of the process.
+struct MediaKeyObjc {
+    class:  usize,
+    sel:    usize,
+    cg_sel: usize,
+}
+
+/// Resolve (once) the NSEvent class and selectors. A failed class lookup is
+/// not cached, so a later call can still succeed once AppKit is available.
+fn media_key_objc() -> Option<&'static MediaKeyObjc> {
+    static CACHE: std::sync::OnceLock<MediaKeyObjc> = std::sync::OnceLock::new();
+    if let Some(cached) = CACHE.get() {
+        return Some(cached);
+    }
+    // SAFETY: objc runtime lookups with valid NUL-terminated names.
+    let resolved = unsafe {
         let class = objc_getClass(c"NSEvent".as_ptr());
         if class.is_null() {
+            return None;
+        }
+        MediaKeyObjc {
+            class: class as usize,
+            sel: sel_registerName(
+                c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:".as_ptr(),
+            ) as usize,
+            cg_sel: sel_registerName(c"CGEvent".as_ptr()) as usize,
+        }
+    };
+    Some(CACHE.get_or_init(|| resolved))
+}
+
+unsafe fn post_media_key_inner(nx_type: isize, pressed: bool) {
+    // SAFETY: Objective-C runtime calls via raw selectors; all pointer arguments are valid or null as required.
+    unsafe {
+        let Some(objc) = media_key_objc() else {
             log::error!("keyd: NSEvent class unavailable");
             return;
-        }
+        };
+        let class = objc.class as *const c_void;
 
-        let sel = sel_registerName(
-            c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:".as_ptr(),
-        );
+        let sel = objc.sel as *const c_void;
 
         // data1 = (nx_type << 16) | (direction << 8)
         //   direction: 0xa = key-down, 0xb = key-up
@@ -649,8 +695,7 @@ pub fn post_media_key(nx_type: isize, pressed: bool) {
             return;
         }
 
-        let cg_sel   = sel_registerName(c"CGEvent".as_ptr());
-        let cg_event = ns_event_get_cgevent(ns_event, cg_sel);
+        let cg_event = ns_event_get_cgevent(ns_event, objc.cg_sel as *const c_void);
 
         if cg_event.is_null() {
             log::warn!("keyd: NSEvent.CGEvent is null for nx_type={nx_type}");

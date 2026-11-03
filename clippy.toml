@@ -1,0 +1,4 @@
+# unwrap_used / expect_used are enforced (Cargo.toml [lints.clippy]) to keep
+# panics out of the daemon, but in tests a panic *is* the failure report.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

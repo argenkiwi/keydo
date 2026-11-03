@@ -55,7 +55,7 @@ impl Keyboard {
         if let Some(action) = resolve {
             let (overload_code, dl, queue_snap, queue_sz) = if let Some(po) = self.pending_overload.as_ref() {
                 let sz = po.queue_sz;
-                let mut q = [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32];
+                let mut q = [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; CHORD_QUEUE_LEN];
                 q[..sz].copy_from_slice(&po.queue[..sz]);
                 (po.code, po.dl as i32, q, sz)
             } else {
