@@ -145,6 +145,26 @@ struct OutputState {
     vkbd:      Vkbd,
     keystate:  [u8; 256],
     listeners: Vec<IpcStream>,
+    /// Scratch buffer for layer-listener messages, reused so a layer change
+    /// with listeners attached doesn't allocate.
+    msg_buf:   Vec<u8>,
+}
+
+/// Daemon-side runtime state kept per loaded keyboard, index-aligned with
+/// `Daemon::keyboards`.
+#[derive(Clone, Copy)]
+struct KbdRuntime {
+    /// Absolute time (ms, `current_time_ms` clock) of this keyboard's next
+    /// pending engine timeout, or -1 if none. Lets the loop tick only the
+    /// keyboards that are actually due.
+    deadline: i64,
+    /// Last layer-indicator LED state written to this keyboard's devices
+    /// (Linux), or `None` if unknown and the next change must be written.
+    led: Option<bool>,
+}
+
+impl KbdRuntime {
+    const IDLE: Self = Self { deadline: -1, led: None };
 }
 
 // ── Daemon ─────────────────────────────────────────────────────────────────
@@ -154,12 +174,33 @@ pub struct Daemon {
     pub keyboards:   Vec<Keyboard>,
     pub devices:     Vec<Device>,
     pub device_kbd:  Vec<Option<usize>>,
+    kbd_rt:     Vec<KbdRuntime>,
     ipc_server: Option<IpcServer>,
     config_dir: String,
     /// Scratch buffer for `dispatch_kbd`, reused across events so the hot path
     /// stays allocation-free. Only ever populated on Linux with layer_indicator
     /// enabled — see `DaemonOutput::on_layer_change`.
     grabbed_fds: Vec<RawFd>,
+}
+
+/// Parse every `.conf` file in `dir`, in sorted path order so startup and
+/// `reload` always produce the same keyboard order (which decides
+/// device-match ties in `manage_device`).
+fn parse_config_dir(dir: &str) -> Vec<Keyboard> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut paths: Vec<_> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "conf"))
+        .collect();
+    paths.sort();
+    paths.iter()
+        .filter_map(|path| path.to_str())
+        .filter_map(|p| match config_parse(p) {
+            Ok(cfg) => Some(Keyboard::new(cfg)),
+            Err(e)  => { log::warn!("{p}: {e}"); None }
+        })
+        .collect()
 }
 
 impl Daemon {
@@ -171,10 +212,11 @@ impl Daemon {
             log::warn!("IPC server unavailable (another daemon running, or permissions issue)");
         }
         Ok(Daemon {
-            output: OutputState { vkbd, keystate: [0; 256], listeners: Vec::new() },
+            output: OutputState { vkbd, keystate: [0; 256], listeners: Vec::new(), msg_buf: Vec::new() },
             keyboards:  Vec::new(),
             devices:    Vec::new(),
             device_kbd: Vec::new(),
+            kbd_rt:     Vec::new(),
             ipc_server,
             config_dir: "/etc/keyd".to_string(),
             grabbed_fds: Vec::new(),
@@ -191,28 +233,43 @@ impl Daemon {
     /// Scan `dir` for `.conf` files and load each one. Returns the count loaded.
     pub fn load_configs_from_dir(&mut self, dir: &str) -> usize {
         self.config_dir = dir.to_string();
-        let mut n = 0;
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            let mut paths: Vec<_> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "conf"))
-                .collect();
-            paths.sort();
-            for path in paths {
-                if let Some(p) = path.to_str() {
-                    match config_parse(p) {
-                        Ok(cfg) => { self.keyboards.push(Keyboard::new(cfg)); n += 1; }
-                        Err(e)  => log::warn!("{p}: {e}"),
-                    }
-                }
-            }
-        }
+        let loaded = parse_config_dir(dir);
+        let n = loaded.len();
+        self.keyboards.extend(loaded);
         n
     }
 
-    fn dispatch_kbd(&mut self, kbd_idx: usize, events: &[KeyEvent]) -> i64 {
-        let Daemon { output: out, keyboards, devices, device_kbd, grabbed_fds, .. } = self;
+    /// Keep `kbd_rt` index-aligned with `keyboards` (which `load_config`,
+    /// `load_configs_from_dir` and `reload` grow or replace).
+    fn sync_kbd_rt(&mut self) {
+        self.kbd_rt.resize(self.keyboards.len(), KbdRuntime::IDLE);
+    }
+
+    /// Milliseconds until the earliest pending keyboard deadline, clamped at
+    /// 0 if one is already overdue, or -1 if none is pending.
+    fn next_timeout_ms(&self, now: i64) -> i64 {
+        self.kbd_rt.iter()
+            .filter(|rt| rt.deadline >= 0)
+            .map(|rt| (rt.deadline - now).max(0))
+            .min()
+            .unwrap_or(-1)
+    }
+
+    /// Deliver a synthetic timeout tick to every keyboard whose deadline has
+    /// passed — and only those.
+    fn tick_due_keyboards(&mut self, now: i64) {
+        let tick = KeyEvent { code: 0, pressed: 0, timestamp: now as i32 };
+        for ki in 0..self.keyboards.len() {
+            let d = self.kbd_rt[ki].deadline;
+            if d >= 0 && d <= now {
+                self.dispatch_kbd(ki, tick, now);
+            }
+        }
+    }
+
+    /// Feed one event to keyboard `kbd_idx` and record its next deadline.
+    fn dispatch_kbd(&mut self, kbd_idx: usize, event: KeyEvent, now: i64) {
+        let Daemon { output: out, keyboards, devices, device_kbd, grabbed_fds, kbd_rt, .. } = self;
 
         // Raw fds of grabbed, non-virtual physical devices for this keyboard,
         // consumed by DaemonOutput::on_layer_change for the layer_indicator LED.
@@ -232,29 +289,26 @@ impl Daemon {
         #[cfg(not(target_os = "linux"))]
         let _ = (&devices, &device_kbd);
 
+        let rt = &mut kbd_rt[kbd_idx];
         let mut adapter = DaemonOutput {
             vkbd:       &out.vkbd,
             keystate:   &mut out.keystate,
             listeners:  &mut out.listeners,
+            msg_buf:    &mut out.msg_buf,
             device_fds: grabbed_fds,
+            led_state:  &mut rt.led,
         };
-        keyboards[kbd_idx].kbd_process_events(&mut adapter, events)
+        let next = keyboards[kbd_idx].kbd_process_events(&mut adapter, &[event]);
+        // The return value is this keyboard's own earliest pending timeout,
+        // so it replaces (not merely tightens) the stored deadline.
+        rt.deadline = if next > 0 { now + next } else { -1 };
     }
 
     fn reload(&mut self) {
-        self.keyboards.clear();
-        if let Ok(entries) = std::fs::read_dir(&self.config_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_conf = path.extension().is_some_and(|e| e == "conf");
-                if let Some(p) = path.to_str().filter(|_| is_conf) {
-                    match config_parse(p) {
-                        Ok(cfg) => self.keyboards.push(Keyboard::new(cfg)),
-                        Err(e)  => log::warn!("{p}: {e}"),
-                    }
-                }
-            }
-        }
+        self.keyboards = parse_config_dir(&self.config_dir);
+        // Fresh keyboards: no pending deadlines, and LED state unknown.
+        self.kbd_rt.clear();
+        self.sync_kbd_rt();
         for i in 0..self.devices.len() {
             self.device_kbd[i] = manage_device(&self.keyboards, &mut self.devices[i]);
         }
@@ -331,6 +385,14 @@ impl Daemon {
 
     /// Enter the main event loop. Blocks until the process is killed or an unrecoverable error occurs.
     pub fn run(&mut self) -> Result<(), String> {
+        // Let the kernel reap `command(...)` children: Op::Command spawns and
+        // drops the Child without waiting, which would otherwise leave one
+        // zombie per invocation. The child restores SIG_DFL before exec.
+        #[cfg(unix)]
+        // SAFETY: setting a signal disposition to SIG_IGN has no memory-safety requirements.
+        unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
+
+        self.sync_kbd_rt();
         self.devices = Device::scan();
         self.device_kbd = self.devices.iter_mut()
             .map(|dev| manage_device(&self.keyboards, dev))
@@ -377,7 +439,6 @@ impl Daemon {
         };
 
         let mut panic_state = PanicState::new();
-        let mut timeout_ms: i64 = -1;
 
         // The pollfd set only changes when a device is added or removed, so it
         // is built once and reused. Rebuilding it per iteration would mean a
@@ -428,13 +489,12 @@ impl Daemon {
             }
 
             // ── Poll ──────────────────────────────────────────────────────
+            let timeout_ms = self.next_timeout_ms(current_time_ms());
             let poll_timeout = if timeout_ms < 0 { -1i32 }
                                else { timeout_ms.min(i32::MAX as i64) as i32 };
-            let poll_start = current_time_ms();
             // SAFETY: pfds is a valid, contiguous slice; nfds is the exact slice length; timeout is valid.
             let poll_ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, poll_timeout) };
-            let now     = current_time_ms();
-            let elapsed = now - poll_start;
+            let now = current_time_ms();
 
             if poll_ret < 0 {
                 let err = std::io::Error::last_os_error();
@@ -444,19 +504,8 @@ impl Daemon {
                 continue;
             }
 
-            // ── Keyboard timeout ──────────────────────────────────────────
-            if timeout_ms >= 0 {
-                timeout_ms -= elapsed;
-                if timeout_ms <= 0 {
-                    let mut next: i64 = -1;
-                    let ev = KeyEvent { code: 0, pressed: 0, timestamp: now as i32 };
-                    for ki in 0..self.keyboards.len() {
-                        let t = self.dispatch_kbd(ki, &[ev]);
-                        if t > 0 { next = if next < 0 { t } else { next.min(t) }; }
-                    }
-                    timeout_ms = next;
-                }
-            }
+            // ── Keyboard timeouts (only keyboards that are due) ───────────
+            self.tick_due_keyboards(now);
 
             // ── Device events ─────────────────────────────────────────────
             for (i, pfd) in pfds.iter().enumerate().take(dev_count) {
@@ -487,11 +536,7 @@ impl Daemon {
                                     pressed:   devev.pressed,
                                     timestamp: now as i32,
                                 };
-                                let next = self.dispatch_kbd(ki, &[ev]);
-                                if next > 0 {
-                                    timeout_ms = if timeout_ms < 0 { next }
-                                                 else { timeout_ms.min(next) };
-                                }
+                                self.dispatch_kbd(ki, ev, now);
                             }
                         }
                         _ => {}
@@ -538,6 +583,11 @@ impl Daemon {
                                 let path = format!("/dev/input/{name_str}");
                                 if let Ok(mut dev) = Device::init(&path) {
                                     let kbd_idx = manage_device(&self.keyboards, &mut dev);
+                                    // The new device's LED is in an unknown
+                                    // state: force the next layer-indicator write.
+                                    if let Some(ki) = kbd_idx {
+                                        self.kbd_rt[ki].led = None;
+                                    }
                                     log::info!("DEVICE: hot-plugged {path}");
                                     self.devices.push(dev);
                                     self.device_kbd.push(kbd_idx);
@@ -581,28 +631,15 @@ impl Daemon {
             .ok_or_else(|| "Windows keyboard hook unavailable".to_string())?;
 
         let mut panic_state = PanicState::new();
-        let mut timeout_ms: i64 = -1;
 
         loop {
+            let timeout_ms = self.next_timeout_ms(current_time_ms());
             let wait_ms = if timeout_ms < 0 { 20 } else { timeout_ms.clamp(1, 20) } as u64;
-            let start = current_time_ms();
             let recv = rx.recv_timeout(std::time::Duration::from_millis(wait_ms));
             let now = current_time_ms();
-            let elapsed = now - start;
 
-            // ── Keyboard timeout (same arithmetic as the unix loop) ───────
-            if timeout_ms >= 0 {
-                timeout_ms -= elapsed;
-                if timeout_ms <= 0 {
-                    let mut next: i64 = -1;
-                    let ev = KeyEvent { code: 0, pressed: 0, timestamp: now as i32 };
-                    for ki in 0..self.keyboards.len() {
-                        let t = self.dispatch_kbd(ki, &[ev]);
-                        if t > 0 { next = if next < 0 { t } else { next.min(t) }; }
-                    }
-                    timeout_ms = next;
-                }
-            }
+            // ── Keyboard timeouts (only keyboards that are due) ───────────
+            self.tick_due_keyboards(now);
 
             // ── Key events (first blocking recv, then drain) ──────────────
             match recv {
@@ -614,11 +651,7 @@ impl Daemon {
                         panic_state.check(code, pressed != 0);
                         if let Some(ki) = kbd_idx {
                             let ev = KeyEvent { code, pressed, timestamp: now as i32 };
-                            let next = self.dispatch_kbd(ki, &[ev]);
-                            if next > 0 {
-                                timeout_ms = if timeout_ms < 0 { next }
-                                             else { timeout_ms.min(next) };
-                            }
+                            self.dispatch_kbd(ki, ev, now);
                         }
                         pending = rx.try_recv().ok();
                     }
@@ -644,8 +677,11 @@ struct DaemonOutput<'a> {
     vkbd:       &'a Vkbd,
     keystate:   &'a mut [u8; 256],
     listeners:  &'a mut Vec<IpcStream>,
+    msg_buf:    &'a mut Vec<u8>,
     /// Raw fds of grabbed physical devices for this keyboard (layer_indicator LED).
     device_fds: &'a [RawFd],
+    /// Last LED state written for this keyboard (Linux layer_indicator).
+    led_state:  &'a mut Option<bool>,
 }
 
 impl<'a> Output for DaemonOutput<'a> {
@@ -663,19 +699,24 @@ impl<'a> Output for DaemonOutput<'a> {
                 kbd.config.layers[i].layer_type != LayerType::Layout
                     && kbd.layer_state[i].active != 0
             });
-            for &fd in self.device_fds {
-                write_led_fd(fd, 1, has_active);
+            // Only touch the LED when its state actually flips.
+            if *self.led_state != Some(has_active) {
+                for &fd in self.device_fds {
+                    write_led_fd(fd, 1, has_active);
+                }
+                *self.led_state = Some(has_active);
             }
         }
 
         if self.listeners.is_empty() { return; }
         let layer = &kbd.config.layers[layer_idx];
-        let msg = if layer.layer_type == LayerType::Layout {
-            format!("/{}\n", layer.name)
-        } else {
-            format!("{}{}\n", if active != 0 { '+' } else { '-' }, layer.name)
-        };
-        let msg_bytes = msg.as_bytes();
+        let prefix = if layer.layer_type == LayerType::Layout { b'/' }
+                     else if active != 0 { b'+' } else { b'-' };
+        self.msg_buf.clear();
+        self.msg_buf.push(prefix);
+        self.msg_buf.extend_from_slice(layer.name.as_bytes());
+        self.msg_buf.push(b'\n');
+        let msg_bytes = self.msg_buf.as_slice();
         // Drop (and thereby close) any listener whose connection has gone away.
         self.listeners.retain_mut(|stream| {
             use std::io::Write;

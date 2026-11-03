@@ -361,13 +361,31 @@ impl Keyboard {
 
             Op::Command => {
                 if pressed != 0 && let DescriptorData::Command(cmd_d) = d.data {
-                    let cmd = self.config.commands[cmd_d.cmd_idx as usize].cmd.clone();
-                    let _ = std::process::Command::new("/bin/sh")
-                        .args(["-c", &cmd])
+                    // The Child is dropped unreaped; the daemon sets SIGCHLD to
+                    // SIG_IGN at startup so the kernel reaps it (no zombies).
+                    let cmd = &self.config.commands[cmd_d.cmd_idx as usize].cmd;
+                    let mut command = std::process::Command::new("/bin/sh");
+                    command
+                        .args(["-c", cmd])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
+                        .stderr(std::process::Stdio::null());
+                    // An ignored SIGCHLD survives exec, which would break user
+                    // commands that wait on their own children (waitpid ->
+                    // ECHILD). Restore the default disposition in the child.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::CommandExt;
+                        // SAFETY: signal(2) is async-signal-safe, the only
+                        // requirement for code run between fork and exec.
+                        unsafe {
+                            command.pre_exec(|| {
+                                libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+                                Ok(())
+                            });
+                        }
+                    }
+                    let _ = command.spawn();
                     self.clear_oneshot(output);
                     self.update_mods(output, -1, 0);
                 }
