@@ -75,7 +75,23 @@ fn manage_device(keyboards: &[Keyboard], device: &mut Device) -> Option<usize> {
     best_idx
 }
 
-// ── LED helpers (Linux only) ───────────────────────────────────────────────
+/// Reap any exited children without blocking.
+///
+/// `Op::Command` spawns `/bin/sh` and drops the `Child` without waiting, so
+/// without this every `command(...)` keypress would leave a zombie. This is
+/// deliberately local rather than setting SIGCHLD to SIG_IGN: an ignored
+/// SIGCHLD makes std's own `waitpid` on a failed exec return ECHILD (which it
+/// asserts against, panicking the daemon), and resetting it in the child needs
+/// `pre_exec`, which forces a full fork instead of posix_spawn. One cheap
+/// syscall per loop iteration; returns immediately with ECHILD when idle.
+#[cfg(unix)]
+fn reap_children() {
+    // SAFETY: waitpid with a null status pointer and WNOHANG has no
+    // memory-safety requirements and never blocks.
+    while unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) } > 0 {}
+}
+
+// ── LED helpers (Linux only)───────────────────────────────────────────────
 
 /// Write one EV_LED event directly to an fd (used for layer_indicator and LED forwarding).
 #[cfg(target_os = "linux")]
@@ -158,13 +174,10 @@ struct KbdRuntime {
     /// pending engine timeout, or -1 if none. Lets the loop tick only the
     /// keyboards that are actually due.
     deadline: i64,
-    /// Last layer-indicator LED state written to this keyboard's devices
-    /// (Linux), or `None` if unknown and the next change must be written.
-    led: Option<bool>,
 }
 
 impl KbdRuntime {
-    const IDLE: Self = Self { deadline: -1, led: None };
+    const IDLE: Self = Self { deadline: -1 };
 }
 
 // ── Daemon ─────────────────────────────────────────────────────────────────
@@ -227,6 +240,7 @@ impl Daemon {
     pub fn load_config(&mut self, path: &str) -> Result<(), String> {
         let cfg = config_parse(path).map_err(|e| e.to_string())?;
         self.keyboards.push(Keyboard::new(cfg));
+        self.sync_kbd_rt();
         Ok(())
     }
 
@@ -236,11 +250,13 @@ impl Daemon {
         let loaded = parse_config_dir(dir);
         let n = loaded.len();
         self.keyboards.extend(loaded);
+        self.sync_kbd_rt();
         n
     }
 
-    /// Keep `kbd_rt` index-aligned with `keyboards` (which `load_config`,
-    /// `load_configs_from_dir` and `reload` grow or replace).
+    /// Keep `kbd_rt` index-aligned with `keyboards`. Every method that grows
+    /// or replaces `keyboards` (`load_config`, `load_configs_from_dir`,
+    /// `reload`) calls this immediately afterwards.
     fn sync_kbd_rt(&mut self) {
         self.kbd_rt.resize(self.keyboards.len(), KbdRuntime::IDLE);
     }
@@ -296,7 +312,6 @@ impl Daemon {
             listeners:  &mut out.listeners,
             msg_buf:    &mut out.msg_buf,
             device_fds: grabbed_fds,
-            led_state:  &mut rt.led,
         };
         let next = keyboards[kbd_idx].kbd_process_events(&mut adapter, &[event]);
         // The return value is this keyboard's own earliest pending timeout,
@@ -385,13 +400,6 @@ impl Daemon {
 
     /// Enter the main event loop. Blocks until the process is killed or an unrecoverable error occurs.
     pub fn run(&mut self) -> Result<(), String> {
-        // Let the kernel reap `command(...)` children: Op::Command spawns and
-        // drops the Child without waiting, which would otherwise leave one
-        // zombie per invocation. The child restores SIG_DFL before exec.
-        #[cfg(unix)]
-        // SAFETY: setting a signal disposition to SIG_IGN has no memory-safety requirements.
-        unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
-
         self.sync_kbd_rt();
         self.devices = Device::scan();
         self.device_kbd = self.devices.iter_mut()
@@ -507,6 +515,9 @@ impl Daemon {
             // ── Keyboard timeouts (only keyboards that are due) ───────────
             self.tick_due_keyboards(now);
 
+            // ── Reap exited command(...) children ─────────────────────────
+            reap_children();
+
             // ── Device events ─────────────────────────────────────────────
             for (i, pfd) in pfds.iter().enumerate().take(dev_count) {
                 if pfd.revents == 0 { continue; }
@@ -583,11 +594,6 @@ impl Daemon {
                                 let path = format!("/dev/input/{name_str}");
                                 if let Ok(mut dev) = Device::init(&path) {
                                     let kbd_idx = manage_device(&self.keyboards, &mut dev);
-                                    // The new device's LED is in an unknown
-                                    // state: force the next layer-indicator write.
-                                    if let Some(ki) = kbd_idx {
-                                        self.kbd_rt[ki].led = None;
-                                    }
                                     log::info!("DEVICE: hot-plugged {path}");
                                     self.devices.push(dev);
                                     self.device_kbd.push(kbd_idx);
@@ -680,8 +686,6 @@ struct DaemonOutput<'a> {
     msg_buf:    &'a mut Vec<u8>,
     /// Raw fds of grabbed physical devices for this keyboard (layer_indicator LED).
     device_fds: &'a [RawFd],
-    /// Last LED state written for this keyboard (Linux layer_indicator).
-    led_state:  &'a mut Option<bool>,
 }
 
 impl<'a> Output for DaemonOutput<'a> {
@@ -699,12 +703,12 @@ impl<'a> Output for DaemonOutput<'a> {
                 kbd.config.layers[i].layer_type != LayerType::Layout
                     && kbd.layer_state[i].active != 0
             });
-            // Only touch the LED when its state actually flips.
-            if *self.led_state != Some(has_active) {
-                for &fd in self.device_fds {
-                    write_led_fd(fd, 1, has_active);
-                }
-                *self.led_state = Some(has_active);
+            // Deliberately rewritten on every layer change rather than only
+            // when has_active flips: LED 1 is the CapsLock LED, which the
+            // vkbd LED-feedback path also writes, so a "last written" cache
+            // would go stale and leave the indicator wrong.
+            for &fd in self.device_fds {
+                write_led_fd(fd, 1, has_active);
             }
         }
 

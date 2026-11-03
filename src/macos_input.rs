@@ -635,31 +635,38 @@ struct MediaKeyObjc {
     cg_sel: usize,
 }
 
-fn media_key_objc() -> &'static MediaKeyObjc {
+/// Resolve (once) the NSEvent class and selectors. A failed class lookup is
+/// not cached, so a later call can still succeed once AppKit is available.
+fn media_key_objc() -> Option<&'static MediaKeyObjc> {
     static CACHE: std::sync::OnceLock<MediaKeyObjc> = std::sync::OnceLock::new();
-    CACHE.get_or_init(|| {
-        // SAFETY: objc runtime lookups with valid NUL-terminated names.
-        unsafe {
-            MediaKeyObjc {
-                class: objc_getClass(c"NSEvent".as_ptr()) as usize,
-                sel: sel_registerName(
-                    c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:".as_ptr(),
-                ) as usize,
-                cg_sel: sel_registerName(c"CGEvent".as_ptr()) as usize,
-            }
+    if let Some(cached) = CACHE.get() {
+        return Some(cached);
+    }
+    // SAFETY: objc runtime lookups with valid NUL-terminated names.
+    let resolved = unsafe {
+        let class = objc_getClass(c"NSEvent".as_ptr());
+        if class.is_null() {
+            return None;
         }
-    })
+        MediaKeyObjc {
+            class: class as usize,
+            sel: sel_registerName(
+                c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:".as_ptr(),
+            ) as usize,
+            cg_sel: sel_registerName(c"CGEvent".as_ptr()) as usize,
+        }
+    };
+    Some(CACHE.get_or_init(|| resolved))
 }
 
 unsafe fn post_media_key_inner(nx_type: isize, pressed: bool) {
     // SAFETY: Objective-C runtime calls via raw selectors; all pointer arguments are valid or null as required.
     unsafe {
-        let objc = media_key_objc();
-        let class = objc.class as *const c_void;
-        if class.is_null() {
+        let Some(objc) = media_key_objc() else {
             log::error!("keyd: NSEvent class unavailable");
             return;
-        }
+        };
+        let class = objc.class as *const c_void;
 
         let sel = objc.sel as *const c_void;
 
