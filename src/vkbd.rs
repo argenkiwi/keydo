@@ -327,10 +327,10 @@ mod macos_vkbd {
                         if st.repeat.revision != rev {
                             break;
                         }
-                        let key_states = st.key_states;
-                        drop(st);
-                        macos_input::post_key_repeat(key, &key_states);
-                        st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                        // Post while still holding the lock: send_key bumps the
+                        // revision under this lock *before* posting a release,
+                        // so a repeat can never land after its key-up.
+                        macos_input::post_key_repeat(key, &st.key_states);
                         wait = std::time::Duration::from_millis(interval_ms);
                     }
                 }
@@ -350,17 +350,36 @@ mod macos_vkbd {
 
             let Some(cgkey) = macos_input::keyd_to_cgkey_code(code) else { return };
 
+            let is_modifier = macos_input::is_modifier_cgkey(cgkey);
             let (lock, cvar) = &*self.shared;
-            {
+            let key_states = {
                 let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if (cgkey as usize) < 128 {
                     st.key_states[cgkey as usize] = state;
                 }
-                let key_states = st.key_states;
-                drop(st);
+                // Arm or cancel the software repeat for non-modifier keys
+                // *before* posting, under the same lock the repeat thread
+                // holds while posting. A release therefore always cancels
+                // first, so no stale repeat key-down can follow its key-up;
+                // and a new press stops the previous key's repeat before the
+                // new key-down goes out.
+                if !is_modifier {
+                    if state != 0 {
+                        st.repeat.key       = cgkey;
+                        st.repeat.armed     = true;
+                        st.repeat.revision += 1;
+                        cvar.notify_one();
+                    } else if st.repeat.key == cgkey && st.repeat.armed {
+                        st.repeat.armed     = false;
+                        st.repeat.revision += 1;
+                        // Wake the repeat thread out of its timed wait.
+                        cvar.notify_one();
+                    }
+                }
+                st.key_states
+            };
 
-                macos_input::post_key(cgkey, state != 0, &key_states);
-            }
+            macos_input::post_key(cgkey, state != 0, &key_states);
 
             // Modifier down events are posted as a separate CGEventFlagsChanged,
             // a different CGEventType than the CGEventKeyDown that typically
@@ -370,24 +389,8 @@ mod macos_vkbd {
             // can occasionally reach the target app before the modifier does —
             // the same class of race worked around in the Linux backend above
             // (see the comment on the button-event sleep in `send_key`).
-            if macos_input::is_modifier_cgkey(cgkey) && state != 0 {
+            if is_modifier && state != 0 {
                 std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-
-            // Arm or cancel the software repeat timer for non-modifier keys.
-            if !macos_input::is_modifier_cgkey(cgkey) {
-                let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if state != 0 {
-                    st.repeat.key       = cgkey;
-                    st.repeat.armed     = true;
-                    st.repeat.revision += 1;
-                    cvar.notify_one();
-                } else if st.repeat.key == cgkey && st.repeat.armed {
-                    st.repeat.armed     = false;
-                    st.repeat.revision += 1;
-                    // Wake the repeat thread out of its timed wait.
-                    cvar.notify_one();
-                }
             }
         }
 
@@ -539,9 +542,10 @@ mod windows_vkbd {
                         if st.revision != rev {
                             break;
                         }
-                        drop(st);
+                        // Inject while still holding the lock: send_key bumps
+                        // the revision under this lock *before* injecting a
+                        // release, so a repeat can never land after its key-up.
                         inject_key(key, true);
-                        st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                         wait = std::time::Duration::from_millis(interval_ms);
                     }
                 }
@@ -568,9 +572,11 @@ mod windows_vkbd {
                 return;
             }
 
-            inject_key(code, state != 0);
-
-            // Arm or cancel the software repeat timer for non-modifier keys.
+            // Arm or cancel the software repeat for non-modifier keys *before*
+            // injecting, under the same lock the repeat thread holds while
+            // injecting. A release therefore always cancels first, so no
+            // stale repeat key-down can follow its key-up; and a new press
+            // stops the previous key's repeat before the new key-down goes out.
             if !is_modifier_keyd(code) {
                 let (lock, cvar) = &*self.shared;
                 let mut st = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -586,6 +592,8 @@ mod windows_vkbd {
                     cvar.notify_one();
                 }
             }
+
+            inject_key(code, state != 0);
         }
 
         pub fn mouse_move(&self, x: i32, y: i32) {
