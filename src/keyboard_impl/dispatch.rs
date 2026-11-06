@@ -110,13 +110,13 @@ impl Keyboard {
                     "cache table full ({CACHE_SIZE} slots) inserting code {code}; \
                      its key-up will be silently dropped"
                 );
-                self.execute_descriptor(output, d, code, layer, pressed, time);
+                self.execute_descriptor(output, d, code, layer, pressed, time, None);
             } else if let Some(entry) = self.cache_get(code) {
                 let d = entry.d;
                 let dl = entry.dl;
                 let cleared = self.cache_set(code, None);
                 debug_assert!(cleared, "cache_set(None) failed to clear code {code} we just found via cache_get");
-                self.execute_descriptor(output, d, code, dl, pressed, time);
+                self.execute_descriptor(output, d, code, dl, pressed, time, None);
 
                 // A resolved chord's synthetic release: the action has now
                 // actually been dispatched (not merely captured into some

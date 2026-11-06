@@ -14,6 +14,29 @@ impl Keyboard {
         self.oneshot_timeout = 0;
     }
 
+    /// Retires `layer` if it's an active oneshot layer that a key was just
+    /// resolved from, so it doesn't linger and shadow the base layer once the
+    /// action that consumed it has run. `oneshot_snapshot`, when set, guards
+    /// against acting on a stale, deferred-replayed `layer` (see
+    /// `pending_overload`/`pending_timeout`'s `dl` capture): the pop only
+    /// proceeds if the layer's live `oneshot_depth` still matches the depth
+    /// observed when the deferred action was originally captured.
+    pub(super) fn pop_originating_oneshot_layer<O: Output>(&mut self, output: &mut O, layer: i32, oneshot_snapshot: Option<u8>) {
+        if layer < 0 || layer as usize >= self.config.layers.len() {
+            return;
+        }
+        let idx = layer as usize;
+        if let Some(snapshot) = oneshot_snapshot
+            && self.layer_state[idx].oneshot_depth != snapshot
+        {
+            return;
+        }
+        while self.layer_state[idx].oneshot_depth > 0 {
+            self.deactivate_layer(output, idx);
+            self.layer_state[idx].oneshot_depth -= 1;
+        }
+    }
+
     pub(super) fn reset_keystate<O: Output>(&mut self, output: &mut O) {
         for i in 0..256 {
             if self.keystate[i] != 0 {
